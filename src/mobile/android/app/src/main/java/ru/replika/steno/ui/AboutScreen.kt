@@ -3,7 +3,10 @@ package ru.replika.steno.ui
 import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -91,7 +94,7 @@ private val LIMITS = listOf(
     "На очень похожих голосах и на шумной записи издалека участников разделить сложнее.",
     "Языковая модель только расставляет знаки и регистр и пишет итоги — слова, говорящих и время она изменить не может.",
     "Для итогов длинной встречи берутся только первые ~8 фрагментов записи: у модели маленькое окно.",
-    "Кому и к какому сроку — заполняется, только если это прозвучало в реплике. Иначе поле остаётся пустым.",
+    "Кто и к какому сроку — заполняется, только если это прозвучало в реплике. Иначе поле остаётся пустым.",
     "Скорость зависит от телефона.",
 )
 
@@ -114,12 +117,13 @@ fun AboutScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
     val llmStatus = remember(job == null, llmOn) { vm.graph.llmStatus }
     val last = items.filter { it.state == RecordingState.READY && it.metrics != null }.maxByOrNull { it.createdAtMs }
 
+    val scroll = rememberScrollState()
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            TopBar(leading = if (wide) null else ({ IconBtn(Ic.Menu, "Открыть меню", onMenu) }))
+            TopBar(leading = if (wide) null else ({ IconBtn(Ic.Menu, "Открыть меню", onMenu) }), side = side, divider = scroll.canScrollBackward)
             Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)
                     .padding(horizontal = side).navigationBarsPadding().padding(bottom = Space.xxl),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -236,10 +240,12 @@ fun AboutScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                         } else {
                             Text(last.title, style = Type.label, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Spacer(Modifier.height(Space.m))
-                            Row(horizontalArrangement = Arrangement.spacedBy(Space.m)) {
-                                Metric("Запись", fmtTime(m.audioDurationMs), Modifier.weight(1f))
-                                Metric("Расшифровка", fmtTime(m.transcriptMs), Modifier.weight(1f))
-                                Metric("Скорость", "×" + String.format(Locale.forLanguageTag("ru"), "%.2f", m.realTimeFactor), Modifier.weight(1f))
+                            // equal tiles; labels and values may wrap to a second line, never cut
+                            Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                                Metric("Аудио", fmtTime(m.audioDurationMs), null, Modifier.weight(1f).fillMaxHeight())
+                                Metric("Обработка", fmtTime(m.transcriptMs), null, Modifier.weight(1f).fillMaxHeight())
+                                val (speed, relation) = speedLabel(m.realTimeFactor)
+                                Metric("Скорость", speed, relation, Modifier.weight(1f).fillMaxHeight())
                             }
                             Spacer(Modifier.height(Space.m))
                             Text(
@@ -280,12 +286,24 @@ private fun Block(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Metric(label: String, value: String, modifier: Modifier) {
+private fun Metric(label: String, value: String, caption: String?, modifier: Modifier) {
     val c = Theme.colors
-    Column(modifier.clip(Radius.r14).background(c.bg).padding(Space.m)) {
-        Text(label, style = Type.label, color = c.muted, maxLines = 1)
+    Column(modifier.clip(Radius.r14).background(c.bg).border(Size.stroke, c.border, Radius.r14).padding(Space.m)) {
+        Text(label, style = Type.label, color = c.muted, maxLines = 2)
         Spacer(Modifier.height(Space.xs))
-        Text(value, style = Type.bodyStrong.copy(fontFeatureSettings = "tnum"), color = c.text, maxLines = 1)
+        Text(value, style = Type.bodyStrong.copy(fontFeatureSettings = "tnum"), color = c.text, maxLines = 2)
+        if (caption != null) Text(caption, style = Type.label, color = c.muted, maxLines = 2)
+    }
+}
+
+/** «в 1,4 раза» + «быстрее записи» from the real-time factor (processing time / audio length). */
+private fun speedLabel(rtf: Float): Pair<String, String> {
+    val ru = Locale.forLanguageTag("ru")
+    if (rtf <= 0f) return "—" to "нет замера"
+    return if (rtf <= 1f) {
+        "в ${String.format(ru, "%.1f", 1f / rtf)} раза" to "быстрее записи"
+    } else {
+        "в ${String.format(ru, "%.1f", rtf)} раза" to "медленнее записи"
     }
 }
 

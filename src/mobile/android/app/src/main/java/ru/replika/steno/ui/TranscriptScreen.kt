@@ -86,7 +86,6 @@ import ru.replika.steno.core.MeetingSummary
 import ru.replika.steno.core.Recording
 import ru.replika.steno.core.RecordingState
 import ru.replika.steno.core.Utterance
-import ru.replika.steno.core.displayName
 import ru.replika.steno.export.TranscriptJson
 import ru.replika.steno.ui.theme.Motion
 import ru.replika.steno.ui.theme.Radius
@@ -101,6 +100,9 @@ private const val LOW_CONFIDENCE = 0.5f
 
 /** Items above the utterances in the transcript list: header + sticky tabs. */
 private const val HEAD_ITEMS = 2
+
+private const val HINTS_PREFS = "ui_hints"
+private const val HINT_TAP_DONE = "transcript_tap_done"
 
 @Composable
 fun TranscriptScreen(vm: ReplikaViewModel, id: String) {
@@ -143,12 +145,26 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
     var follow by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
     val summaryState = rememberLazyListState()
+    val scrolled by remember { derivedStateOf { (if (tab == 0) listState else summaryState).canScrollBackward } }
+
+    // «Нажмите на реплику…» is shown until the first tap on a replica (remembered across launches).
+    val hints = remember { context.getSharedPreferences(HINTS_PREFS, Context.MODE_PRIVATE) }
+    var hintDone by remember { mutableStateOf(hints.getBoolean(HINT_TAP_DONE, false)) }
+    // The header slot (hint or the background-pass indicator) stays while the screen is open once shown,
+    // so the list never jumps when the pass finishes or the hint goes away.
+    var headerSlot by remember { mutableStateOf(rec.llmPending || !hintDone) }
+    LaunchedEffect(rec.llmPending) { if (rec.llmPending) headerSlot = true }
+    fun tapped() {
+        if (hintDone) return
+        hintDone = true
+        hints.edit().putBoolean(HINT_TAP_DONE, true).apply()
+    }
 
     val speakers = remember(utts) { utts.map { it.speakerId }.distinct().sortedBy { it.substringAfterLast('_').toIntOrNull() ?: Int.MAX_VALUE } }
     val q = query.trim()
     val matches = remember(utts, q, rec.speakerNames) {
         if (q.isEmpty()) emptyList() else utts.indices.filter { i ->
-            utts[i].text.contains(q, true) || rec.displayName(utts[i].speakerId).contains(q, true)
+            utts[i].text.contains(q, true) || rec.label(utts[i].speakerId).contains(q, true)
         }
     }
     val activeMatch = matches.getOrNull(matchPos.coerceIn(0, (matches.size - 1).coerceAtLeast(0)))
@@ -238,7 +254,7 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
         }
     }
     fun copyAll() {
-        val text = utts.joinToString("\n") { "${rec.displayName(it.speakerId)} [${fmtTime(it.startMs)}]: ${it.text}" }
+        val text = utts.joinToString("\n") { "${rec.label(it.speakerId)} [${fmtTime(it.startMs)}]: ${it.text}" }
         copy(context, "Расшифровка", text)
         vm.toast("Текст скопирован")
     }
@@ -246,51 +262,58 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            // The top bar keeps its height when it turns into the search field.
-            Fade(searchOpen, Modifier.fillMaxWidth().height(Size.topBar)) { open ->
-                if (open) {
-                    Row(Modifier.fillMaxSize().padding(end = Space.s), verticalAlignment = Alignment.CenterVertically) {
-                        IconBtn(Ic.Back, "Закрыть поиск", { searchOpen = false; query = "" }, Modifier.padding(start = Space.xs))
-                        SearchField(
-                            query, { query = it; matchPos = 0 }, "Найти в расшифровке", Modifier.weight(1f),
-                            onSearch = { if (matches.isNotEmpty()) matchPos = (matchPos + 1) % matches.size },
-                        )
-                        Spacer(Modifier.width(Space.xs))
-                        Text(
-                            if (q.isEmpty()) "" else if (matches.isEmpty()) "0" else "${matchPos + 1}/${matches.size}",
-                            style = Type.labelNum, color = c.muted, modifier = Modifier.width(Space.xxl + Space.l),
-                            maxLines = 1,
-                        )
-                        IconBtn(Ic.Up, "Предыдущее совпадение", { matchPos = (matchPos - 1 + matches.size) % matches.size }, enabled = matches.size > 1)
-                        IconBtn(Ic.Down, "Следующее совпадение", { matchPos = (matchPos + 1) % matches.size }, enabled = matches.size > 1)
-                    }
-                } else {
-                    TopBar(leading = { IconBtn(Ic.Back, "К записям", { vm.navigate(Screen.Library) }) }) {
-                        IconBtn(Ic.Search, "Поиск по расшифровке", { searchOpen = true; tab = 0 })
-                        IconBtn(Ic.Share, "Поделиться JSON", { share(ExportFormat.JSON) })
-                        Box {
-                            IconBtn(Ic.More, "Ещё действия", { menu = true })
-                            AppMenu(
-                                menu, { menu = false },
-                                listOf(
-                                    MenuEntry("Сохранить JSON", Ic.Download, onClick = { export(ExportFormat.JSON) }),
-                                    MenuEntry("Сохранить TXT", Ic.Download, onClick = { export(ExportFormat.TXT) }),
-                                    MenuEntry("Поделиться JSON", Ic.Share, onClick = { share(ExportFormat.JSON) }),
-                                    MenuEntry("Поделиться TXT", Ic.Share, onClick = { share(ExportFormat.TXT) }),
-                                    MenuEntry("Скопировать текст", Ic.Copy, onClick = ::copyAll),
-                                    MenuEntry("Обработать заново", Ic.Refresh, onClick = { dlg = Dlg.Rerun }),
-                                ),
+            // The top bar keeps its height when it turns into the search field; a hairline appears under it
+            // while the list is scrolled beneath.
+            Box(Modifier.fillMaxWidth().height(Size.topBar)) {
+                Fade(searchOpen, Modifier.fillMaxSize()) { open ->
+                    if (open) {
+                        Row(Modifier.fillMaxSize().padding(horizontal = barInset(side)), verticalAlignment = Alignment.CenterVertically) {
+                            IconBtn(Ic.Back, "Закрыть поиск", { searchOpen = false; query = "" })
+                            SearchField(
+                                query, { query = it; matchPos = 0 }, "Найти в расшифровке", Modifier.weight(1f),
+                                onSearch = { if (matches.isNotEmpty()) matchPos = (matchPos + 1) % matches.size },
                             )
+                            Spacer(Modifier.width(Space.xs))
+                            Text(
+                                if (q.isEmpty()) "" else if (matches.isEmpty()) "0" else "${matchPos + 1}/${matches.size}",
+                                style = Type.labelNum, color = c.muted, modifier = Modifier.width(Space.xxl + Space.l),
+                                maxLines = 1,
+                            )
+                            IconBtn(Ic.Up, "Предыдущее совпадение", { matchPos = (matchPos - 1 + matches.size) % matches.size }, enabled = matches.size > 1)
+                            IconBtn(Ic.Down, "Следующее совпадение", { matchPos = (matchPos + 1) % matches.size }, enabled = matches.size > 1)
+                        }
+                    } else {
+                        TopBar(leading = { IconBtn(Ic.Back, "К записям", { vm.navigate(Screen.Library) }) }, side = side) {
+                            IconBtn(Ic.Search, "Поиск по расшифровке", { searchOpen = true; tab = 0 })
+                            IconBtn(Ic.Share, "Поделиться JSON", { share(ExportFormat.JSON) })
+                            Box {
+                                IconBtn(Ic.More, "Ещё действия", { menu = true })
+                                AppMenu(
+                                    menu, { menu = false },
+                                    listOf(
+                                        MenuEntry("Сохранить JSON", Ic.Download, onClick = { export(ExportFormat.JSON) }),
+                                        MenuEntry("Сохранить TXT", Ic.Download, onClick = { export(ExportFormat.TXT) }),
+                                        MenuEntry("Поделиться JSON", Ic.Share, onClick = { share(ExportFormat.JSON) }),
+                                        MenuEntry("Поделиться TXT", Ic.Share, onClick = { share(ExportFormat.TXT) }),
+                                        MenuEntry("Скопировать текст", Ic.Copy, onClick = ::copyAll),
+                                        MenuEntry("Обработать заново", Ic.Refresh, onClick = { dlg = Dlg.Rerun }),
+                                    ),
+                                )
+                            }
                         }
                     }
                 }
+                val line by androidx.compose.animation.core.animateFloatAsState(
+                    if (scrolled) 1f else 0f, Motion.spec(Theme.reducedMotion, Motion.FAST), label = "topDivider",
+                )
+                Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(Size.stroke).alpha(line).background(c.border))
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val header: @Composable () -> Unit = {
-                    Header(rec, speakers, side, onRename = { dlg = Dlg.Rename(it) })
+                    Header(rec, speakers, side, slot = headerSlot, hint = !hintDone, onRename = { dlg = Dlg.Rename(it) })
                 }
                 val tabs: @Composable () -> Unit = {
-                    Column(Modifier.fillMaxWidth().background(c.bg).padding(horizontal = side, vertical = Space.s)) {
+                    Column(Modifier.fillMaxWidth().background(c.bg).padding(horizontal = side, vertical = Space.xs)) {
                         Segmented(
                             listOf(0, 1), tab, { tab = it },
                             label = { if (it == 0) "Расшифровка" else "Итоги" }, modifier = Modifier.fillMaxWidth(),
@@ -321,13 +344,13 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
                                     playing = i == current || i == flash,
                                     query = if (matches.isNotEmpty()) q else "",
                                     active = i == activeMatch,
-                                    onPlay = { jumpTo(i) },
+                                    onPlay = { tapped(); jumpTo(i) },
                                     onRename = { dlg = Dlg.Rename(u.speakerId) },
                                     onEdit = { dlg = Dlg.Edit(i) },
                                     onOriginal = { dlg = Dlg.Original(i) },
                                     onConfidence = { dlg = Dlg.Confidence(i) },
                                     onCopy = {
-                                        copy(context, "Реплика", "${rec.displayName(u.speakerId)} [${fmtTime(u.startMs)}]: ${u.text}")
+                                        copy(context, "Реплика", "${rec.label(u.speakerId)} [${fmtTime(u.startMs)}]: ${u.text}")
                                         vm.toast("Реплика скопирована")
                                     },
                                 )
@@ -380,7 +403,7 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
             AppDialog("Говорящий под вопросом", { dlg = null }, buttons = { TextAction("Понятно", { dlg = null }) }) {
                 Text(
                     "Модель голосов сама оценила, насколько эта фраза похожа на остальные фразы участника " +
-                        "«${rec.displayName(u.speakerId)}». Её оценка: ${String.format(Locale.ROOT, "%.2f", u.speakerConfidence ?: 0f)} " +
+                        "«${rec.label(u.speakerId)}». Её оценка: ${String.format(Locale.ROOT, "%.2f", u.speakerConfidence ?: 0f)} " +
                         "по шкале от −1 до 1. Ниже 0,5 фраза могла принадлежать другому человеку — например, при наложении голосов или похожих тембрах.",
                     style = Type.body, color = c.text,
                 )
@@ -423,38 +446,46 @@ private suspend fun LazyListState.ensureVisible(index: Int) {
 
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
-private fun Header(rec: Recording, speakers: List<String>, side: Dp, onRename: (String) -> Unit) {
+private fun Header(rec: Recording, speakers: List<String>, side: Dp, slot: Boolean, hint: Boolean, onRename: (String) -> Unit) {
     val c = Theme.colors
-    Column(Modifier.fillMaxWidth().padding(bottom = Space.s)) {
+    Column(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(horizontal = side)) {
             Text(rec.title, style = Type.display, color = c.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(Space.s))
+            Spacer(Modifier.height(Space.xs))
             Text(
                 listOf(fmtTime(rec.durationMs), plural(speakers.size, "участник", "участника", "участников"), fmtDate(rec.createdAtMs)).joinToString(" · "),
                 style = Type.labelNum, color = c.muted,
             )
-            Spacer(Modifier.height(Space.s))
-            // One fixed-height slot: background LLM pass indicator, or a hint once it is done.
-            Fade(rec.llmPending, Modifier.fillMaxWidth().height(Size.iconSmall + Space.xs)) { pending ->
-                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                    if (pending) {
-                        CircularProgressIndicator(Modifier.size(Space.l - Space.xs), color = c.text, trackColor = c.raised, strokeWidth = 2.dp)
-                        Spacer(Modifier.width(Space.s))
-                        Text("Оформление и итоги готовятся…", style = Type.label, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    } else {
-                        Text("Нажмите на реплику, чтобы послушать с этого места", style = Type.label, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // One fixed-height slot: the background pass indicator, or the tap hint until the first tap.
+            if (slot) {
+                Spacer(Modifier.height(Space.s))
+                val content = when {
+                    rec.llmPending -> 1
+                    hint -> 2
+                    else -> 0
+                }
+                Fade(content, Modifier.fillMaxWidth().height(Size.iconSmall + Space.xs)) { k ->
+                    Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                        when (k) {
+                            1 -> {
+                                CircularProgressIndicator(Modifier.size(Space.l - Space.xs), color = c.text, trackColor = c.raised, strokeWidth = 2.dp)
+                                Spacer(Modifier.width(Space.s))
+                                Text("Оформление и итоги готовятся…", style = Type.label, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                            2 -> Text("Нажмите на реплику, чтобы послушать с этого места", style = Type.label, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            else -> Unit
+                        }
                     }
                 }
             }
-            Spacer(Modifier.height(Space.m))
         }
-        // wraps to new lines instead of running off the screen when there are many participants
+        // 48dp touch rows around 32dp pills already give the 8dp visual gaps above and below.
         FlowRow(
             Modifier.fillMaxWidth().padding(horizontal = side),
             horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
             speakers.forEach { s ->
-                SpeakerChip(rec.displayName(s), c.speakerTone(s), "Переименовать участника", onClick = { onRename(s) }, trailing = Ic.Edit)
+                SpeakerChip(rec.label(s), c.speakerTone(s), "Переименовать участника", onClick = { onRename(s) }, trailing = Ic.Edit)
             }
         }
     }
@@ -463,9 +494,9 @@ private fun Header(rec: Recording, speakers: List<String>, side: Dp, onRename: (
 @Composable
 private fun SpeakerChip(name: String, tone: Color, actionLabel: String, onClick: () -> Unit, trailing: androidx.compose.ui.graphics.vector.ImageVector? = null) {
     val c = Theme.colors
-    // 48dp tall touch area around a 32dp visual pill.
+    // 48dp touch area around a 32dp visual pill.
     Box(
-        Modifier.height(Size.touch).clip(Radius.pill).clickable(role = Role.Button, onClickLabel = actionLabel, onClick = onClick),
+        Modifier.touchTarget().clip(Radius.pill).clickable(role = Role.Button, onClickLabel = actionLabel, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Row(
@@ -475,7 +506,7 @@ private fun SpeakerChip(name: String, tone: Color, actionLabel: String, onClick:
         ) {
             Box(Modifier.size(Size.dot).clip(Radius.pill).background(tone))
             Spacer(Modifier.width(Space.s))
-            Text(name, style = Type.label, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 180.dp))
+            Text(name, style = Type.label, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
             if (trailing != null) {
                 Spacer(Modifier.width(Space.s))
                 Icon(trailing, null, Modifier.size(14.dp), tint = c.muted)
@@ -503,19 +534,31 @@ private fun UtteranceRow(
     var menu by remember { mutableStateOf(false) }
     val bg by animateColorAsState(if (playing) c.playing else c.bg, Motion.spec(Theme.reducedMotion), label = "row")
     val doubtful = u.speakerConfidence?.let { it < LOW_CONFIDENCE } == true
-    Box(Modifier.fillMaxWidth().padding(horizontal = side - Space.s)) {
+    val tone = c.speakerTone(u.speakerId)
+    // The highlight extends 12dp past the text column, so the ⋮ lines up with the top bar's ⋮.
+    Box(Modifier.fillMaxWidth().padding(horizontal = barInset(side))) {
         Column(
             Modifier.fillMaxWidth().clip(Radius.r14).background(bg)
                 .combinedClickable(onClickLabel = "Слушать с этого места", onClick = onPlay, onLongClick = { menu = true })
-                .padding(start = Space.s, bottom = Space.m),
+                .padding(start = side - barInset(side), bottom = Space.m),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                SpeakerChip(rec.displayName(u.speakerId), c.speakerTone(u.speakerId), "Переименовать участника", onRename)
+                // plain speaker line: colored dot + name (tap to rename) + time (tap to listen)
+                Row(
+                    Modifier.weight(1f, fill = false).heightIn(min = Size.touch).clip(Radius.r8)
+                        .clickable(role = Role.Button, onClickLabel = "Переименовать участника", onClick = onRename)
+                        .padding(end = Space.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(Modifier.size(Size.dot).clip(Radius.pill).background(tone))
+                    Spacer(Modifier.width(Space.s))
+                    Text(rec.label(u.speakerId), style = Type.speaker, color = c.text)
+                }
                 Box(
-                    Modifier.height(Size.touch).clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "Слушать с ${fmtTime(u.startMs)}", onClick = onPlay)
+                    Modifier.touchTarget().clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "Слушать с ${fmtTime(u.startMs)}", onClick = onPlay)
                         .padding(horizontal = Space.s),
                     contentAlignment = Alignment.Center,
-                ) { Text(fmtTime(u.startMs), style = Type.labelNum, color = if (playing) c.text else c.muted) }
+                ) { Text(fmtTime(u.startMs), style = Type.speakerTime, color = if (playing) c.text else c.muted, maxLines = 1) }
                 if (u.lang == "en") {
                     Text("EN", style = Type.labelNum, color = c.muted, modifier = Modifier.padding(end = Space.s))
                 }
@@ -528,7 +571,7 @@ private fun UtteranceRow(
                 Spacer(Modifier.weight(1f))
                 if (u.edited) {
                     Box(
-                        Modifier.height(Size.touch).clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "Показать исходный текст", onClick = onOriginal)
+                        Modifier.touchTarget().clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "Показать исходный текст", onClick = onOriginal)
                             .padding(horizontal = Space.s),
                         contentAlignment = Alignment.Center,
                     ) { Text("изменено", style = Type.label, color = c.muted, maxLines = 1) }
@@ -548,7 +591,7 @@ private fun UtteranceRow(
             }
             Text(
                 highlight(u.text, query, if (active) c.matchActive else c.match),
-                style = Type.body, color = c.text, modifier = Modifier.padding(end = Space.l),
+                style = Type.body, color = c.text, modifier = Modifier.padding(end = side - barInset(side)),
             )
         }
     }
@@ -612,7 +655,7 @@ private fun SummaryList(
                 AppCard(Modifier.fillMaxWidth().padding(horizontal = side), padding = PaddingValues(start = Space.l, end = Space.l, top = Space.l, bottom = Space.xs)) {
                     points.forEachIndexed { i, p ->
                         if (i > 0) { Spacer(Modifier.height(Space.xs)); Hairline(); Spacer(Modifier.height(Space.m)) }
-                        Text(p.text, style = Type.body, color = c.text)
+                        Text(rec.labelText(p.text), style = Type.body, color = c.text)
                         RefChips(rec, p.utteranceIndices, onJump)
                     }
                 }
@@ -630,7 +673,7 @@ private fun SummaryList(
         }
         item(key = "note") {
             Text(
-                "Итоги собрала языковая модель на устройстве. Каждый пункт ссылается на реплики, из которых он взят. Подтверждения видны только здесь и в экспорт не попадают.",
+                "Итоги собраны на устройстве. Отметки не попадают в экспорт.",
                 style = Type.label, color = c.muted, modifier = Modifier.padding(horizontal = side, vertical = Space.s),
             )
         }
@@ -657,7 +700,7 @@ private fun RefChips(rec: Recording, indices: List<Int>, onJump: (Int) -> Unit) 
 private fun RefChip(startMs: Long, onClick: () -> Unit) {
     val c = Theme.colors
     Box(
-        Modifier.height(Size.touch).clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "К реплике ${fmtTime(startMs)}", onClick = onClick),
+        Modifier.touchTarget().clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "К реплике ${fmtTime(startMs)}", onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Row(
@@ -680,49 +723,49 @@ private fun ActionCard(a: ActionItem, rec: Recording, side: Dp, onJump: (Int) ->
             .border(Size.stroke, if (a.confirmed) c.borderStrong else c.border, Radius.r20)
             .padding(start = Space.l, end = Space.l, top = Space.l, bottom = Space.s),
     ) {
-        Field("Что сделать", a.text, strong = true)
+        Field("Что сделать", rec.labelText(a.text), strong = true)
         Spacer(Modifier.height(Space.m))
         Row(horizontalArrangement = Arrangement.spacedBy(Space.l)) {
-            Field("Кому", a.assignee, "— не прозвучало", Modifier.weight(1f))
-            Field("Срок", a.due, "— не прозвучал", Modifier.weight(1f))
+            Field("Кто", a.assignee?.let(rec::labelText), Modifier.weight(1f))
+            Field("Срок", a.due, Modifier.weight(1f))
         }
         Spacer(Modifier.height(Space.s))
         Row(verticalAlignment = Alignment.CenterVertically) {
             rec.utterances.getOrNull(a.utteranceIndex)?.let { RefChip(it.startMs) { onJump(a.utteranceIndex) } }
             Spacer(Modifier.weight(1f))
+            // checkbox-style square; the label stays the same so nothing shifts when it is ticked
             Row(
-                Modifier.height(Size.touch).clip(Radius.pill)
+                Modifier.touchTarget().clip(Radius.pill)
                     .toggleable(a.confirmed, role = Role.Checkbox, onValueChange = onConfirm)
                     .padding(horizontal = Space.s),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
-                    Modifier.size(Size.icon).clip(Radius.pill)
+                    Modifier.size(Size.iconSmall + Space.xs - Size.stroke * 2).clip(Radius.r6)
                         .background(if (a.confirmed) c.text else c.bg)
-                        .border(Size.stroke, if (a.confirmed) c.text else c.borderStrong, Radius.pill),
+                        .border(Size.stroke, if (a.confirmed) c.text else c.borderStrong, Radius.r6),
                     contentAlignment = Alignment.Center,
                 ) { if (a.confirmed) Icon(Ic.Check, null, Modifier.size(14.dp), tint = c.onText) }
                 Spacer(Modifier.width(Space.s))
-                Text(if (a.confirmed) "Подтверждено" else "Подтвердить", style = Type.label, color = c.text, maxLines = 1)
+                Text("Подтверждено", style = Type.label, color = if (a.confirmed) c.text else c.muted, maxLines = 1)
             }
         }
     }
 }
 
 @Composable
-private fun Field(label: String, value: String?, empty: String = "", modifier: Modifier = Modifier, strong: Boolean = false) {
+private fun Field(label: String, value: String?, modifier: Modifier = Modifier, strong: Boolean = false) {
     val c = Theme.colors
     Column(modifier) {
         Text(label, style = Type.label, color = c.muted)
         Spacer(Modifier.height(Space.xs))
         Text(
-            value ?: empty,
+            value?.takeIf { it.isNotBlank() } ?: "—",
             style = if (strong) Type.bodyStrong else Type.body,
-            color = if (value == null) c.muted else c.text,
+            color = if (value.isNullOrBlank()) c.muted else c.text,
         )
     }
 }
-
 /** Placeholder blocks shaped like the summary while the LLM pass is still running. */
 @Composable
 private fun SummarySkeleton(side: Dp) {
@@ -805,8 +848,8 @@ private fun RenameDialog(speakerId: String, current: String, onSave: (String) ->
         TextAction("Отмена", onDismiss, color = c.muted)
         TextAction("Сохранить", { onSave(name); onDismiss() })
     }) {
-        DialogField(name, { name = it.take(60) }, Modifier.fillMaxWidth(), placeholder = speakerId, singleLine = true)
-        Text("Имя видно только в приложении. В экспорте остаётся «$speakerId».", style = Type.label, color = c.muted)
+        DialogField(name, { name = it.take(60) }, Modifier.fillMaxWidth(), placeholder = defaultSpeakerLabel(speakerId), singleLine = true)
+        Text("Имя видно в приложении и в TXT. В JSON остаётся «$speakerId».", style = Type.label, color = c.muted)
     }
 }
 

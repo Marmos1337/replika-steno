@@ -1,8 +1,8 @@
 package ru.replika.steno.ui
 
-import ru.replika.steno.AppGraph
-
 import android.os.SystemClock
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -51,7 +51,10 @@ import ru.replika.steno.ui.theme.Space
 import ru.replika.steno.ui.theme.Theme
 import ru.replika.steno.ui.theme.Type
 
-private const val STAGE_ROW = 56
+/** The bottom action block always reserves two stacked buttons, so «Отменить» and «К записям» sit in one place. */
+private val ACTIONS_HEIGHT = Size.touch * 2 + Space.s
+
+private enum class View { RUNNING, QUEUED, FAILED }
 
 @Composable
 fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
@@ -61,6 +64,9 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
     val job by vm.job.collectAsState()
     val started by vm.jobStartedAt.collectAsState()
     val rec = items.firstOrNull { it.id == id }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.import(uri)
+    }
 
     LaunchedEffect(rec?.state, loaded) {
         when {
@@ -73,33 +79,57 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
     val mine = job?.takeIf { it.recordingId == id }
     val other = job?.takeIf { it.recordingId != id }
     val view = when {
-        rec.state == RecordingState.FAILED -> "failed"
-        rec.state == RecordingState.NEW && other != null -> "queued"
-        else -> "running"
+        rec.state == RecordingState.FAILED -> View.FAILED
+        rec.state == RecordingState.NEW && other != null -> View.QUEUED
+        else -> View.RUNNING
     }
+    val failure = failureKind(rec.error)
+    val toLibrary = { vm.navigate(Screen.Library) }
+    val scroll = rememberScrollState()
 
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            TopBar(leading = { IconBtn(Ic.Back, "К записям", { vm.navigate(Screen.Library) }) })
-            Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())
-                    .padding(horizontal = side).navigationBarsPadding().padding(bottom = Space.xl),
-            ) {
+            TopBar(leading = { IconBtn(Ic.Back, "К записям", toLibrary) }, side = side, divider = scroll.canScrollBackward)
+            // Fixed-size area between the top bar and the buttons; states cross-fade inside it.
+            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(horizontal = side).padding(bottom = Space.xl)) {
                 Text(rec.title, style = Type.display, color = c.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(Space.s))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Ic.Shield, null, Modifier.size(Size.iconSmall), tint = c.muted)
                     Spacer(Modifier.width(Space.s))
-                    Text("Обработка идёт на устройстве, без интернета", style = Type.label, color = c.muted)
+                    Fade(view == View.FAILED, Modifier.weight(1f)) { failed ->
+                        Text(
+                            if (failed) "Всё обрабатывается на устройстве" else "Обработка идёт на устройстве, без интернета",
+                            style = Type.label, color = c.muted,
+                        )
+                    }
                 }
                 Spacer(Modifier.height(Space.xl))
                 Fade(view, Modifier.fillMaxWidth()) { v ->
                     Column(Modifier.fillMaxWidth()) {
                         when (v) {
-                            "failed" -> FailedView(rec.error ?: "Не удалось обработать запись.", onRetry = { vm.reprocess(id) }, onBack = { vm.navigate(Screen.Library) })
-                            "queued" -> QueuedView(items.firstOrNull { it.id == other?.recordingId }?.title, onBack = { vm.navigate(Screen.Library) })
-                            else -> RunningView(mine, started?.takeIf { it.first == id }?.second, onCancel = vm::cancelJob)
+                            View.FAILED -> FailedView(rec.error, failure)
+                            View.QUEUED -> QueuedView(items.firstOrNull { it.id == other?.recordingId }?.title)
+                            View.RUNNING -> RunningView(mine, started?.takeIf { it.first == id }?.second)
+                        }
+                    }
+                }
+            }
+            // Actions anchored to the bottom: two-button height in every state, only the labels change.
+            Fade(view, Modifier.fillMaxWidth().navigationBarsPadding().padding(start = side, end = side, bottom = Space.l).height(ACTIONS_HEIGHT)) { v ->
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Space.s, Alignment.Bottom)) {
+                    when (v) {
+                        View.RUNNING -> SecondaryButton("Отменить", vm::cancelJob, Modifier.fillMaxWidth(), Ic.Close, enabled = mine != null)
+                        View.QUEUED -> SecondaryButton("К записям", toLibrary, Modifier.fillMaxWidth())
+                        View.FAILED -> {
+                            when (failure) {
+                                FailureKind.STOPPED -> PrimaryButton("Обработать снова", { vm.reprocess(id) }, Modifier.fillMaxWidth(), Ic.Refresh)
+                                FailureKind.OTHER -> PrimaryButton("Попробовать снова", { vm.reprocess(id) }, Modifier.fillMaxWidth(), Ic.Refresh)
+                                FailureKind.NO_SPEECH, FailureKind.CORRUPT ->
+                                    PrimaryButton("Выбрать другой файл", { picker.launch(AUDIO_TYPES) }, Modifier.fillMaxWidth(), Ic.File)
+                            }
+                            SecondaryButton("К записям", toLibrary, Modifier.fillMaxWidth())
                         }
                     }
                 }
@@ -109,7 +139,7 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
 }
 
 @Composable
-private fun RunningView(job: ActiveJob?, startedAt: Long?, onCancel: () -> Unit) {
+private fun RunningView(job: ActiveJob?, startedAt: Long?) {
     val c = Theme.colors
     var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(Unit) {
@@ -149,26 +179,24 @@ private fun RunningView(job: ActiveJob?, startedAt: Long?, onCancel: () -> Unit)
             StageRow(s, state, if (s == stage) job?.progress?.stageFraction ?: 0f else 0f, waitingForModels = preparing && s == stage)
         }
     }
-    Spacer(Modifier.height(Space.m))
+    Spacer(Modifier.height(Space.l))
     Text(
         "Расшифровка откроется сразу после распознавания. Оформление текста и итоги встречи доделаются в фоне.",
-        style = Type.label, color = c.muted, modifier = Modifier.padding(horizontal = Space.xs),
+        style = Type.label, color = c.muted,
     )
     Spacer(Modifier.height(Space.s))
-    // Reserved even when hidden, so the button below never moves.
+    // Reserved even when hidden, so nothing below it moves.
     Text(
         "Первый запуск: языковая модель (около 550 МБ) копируется из приложения. Это займёт пару минут, дальше будет быстрее.",
         style = Type.label, color = c.muted, minLines = 2,
-        modifier = Modifier.alpha(if (preparing) 1f else 0f).padding(horizontal = Space.xs),
+        modifier = Modifier.alpha(if (preparing) 1f else 0f),
     )
-    Spacer(Modifier.height(Space.xl))
-    SecondaryButton("Отменить", onCancel, Modifier.fillMaxWidth(), Ic.Close, enabled = job != null)
 }
 
 @Composable
 private fun StageRow(stage: Stage, state: Int, fraction: Float, waitingForModels: Boolean) {
     val c = Theme.colors
-    Row(Modifier.fillMaxWidth().heightIn(min = STAGE_ROW.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = Size.touch), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(Size.icon), contentAlignment = Alignment.Center) {
             when (state) {
                 2 -> Box(Modifier.size(Size.icon).clip(Radius.pill).background(c.text), contentAlignment = Alignment.Center) {
@@ -194,8 +222,8 @@ private fun StageRow(stage: Stage, state: Int, fraction: Float, waitingForModels
         Spacer(Modifier.width(Space.s))
         Text(
             when (state) {
-                2 -> "готово"
-                1 -> if (waitingForModels) "загрузка моделей" else "${(fraction * 100).toInt()}%"
+                2 -> "100%"
+                1 -> if (waitingForModels) "" else "${(fraction * 100).toInt()}%"
                 else -> ""
             },
             style = Type.labelNum, color = c.muted,
@@ -204,29 +232,37 @@ private fun StageRow(stage: Stage, state: Int, fraction: Float, waitingForModels
 }
 
 @Composable
-private fun FailedView(error: String, onRetry: () -> Unit, onBack: () -> Unit) {
+private fun FailedView(error: String?, kind: FailureKind) {
     val c = Theme.colors
     // a stop the user asked for is not an error: calm icon and wording
-    val stopped = error == AppGraph.CANCELLED
-    AppCard(Modifier.fillMaxWidth()) {
-        RoundIcon(if (stopped) Ic.Close else Ic.Alert, danger = !stopped)
-        Spacer(Modifier.height(Space.l))
-        Text(if (stopped) "Обработка остановлена" else "Не получилось обработать", style = Type.heading, color = c.text)
-        Spacer(Modifier.height(Space.s))
-        Text(if (stopped) "Запись сохранена. Обработку можно запустить снова в любой момент." else error, style = Type.body, color = c.muted)
+    val (title, text) = when (kind) {
+        FailureKind.STOPPED -> "Обработка остановлена" to "Запись сохранена. Обработку можно запустить снова в любой момент."
+        FailureKind.CORRUPT -> "Файл не открывается" to "Возможно, он повреждён или это не аудио."
+        FailureKind.NO_SPEECH -> "Речь не найдена" to "Проверьте, что голос в записи слышно."
+        FailureKind.OTHER -> "Не получилось обработать" to (error ?: "Не удалось обработать запись.")
     }
-    Spacer(Modifier.height(Space.xl))
-    Column(verticalArrangement = Arrangement.spacedBy(Space.s)) {
-        PrimaryButton(if (stopped) "Обработать снова" else "Попробовать снова", onRetry, Modifier.fillMaxWidth(), Ic.Refresh)
-        SecondaryButton("К записям", onBack, Modifier.fillMaxWidth())
+    AppCard(Modifier.fillMaxWidth()) {
+        EmptyIcon(
+            when (kind) {
+                FailureKind.STOPPED -> Ic.Close
+                FailureKind.NO_SPEECH -> Ic.MicOff
+                FailureKind.CORRUPT -> Ic.File
+                FailureKind.OTHER -> Ic.Alert
+            },
+            danger = kind != FailureKind.STOPPED,
+        )
+        Spacer(Modifier.height(Space.l))
+        Text(title, style = Type.heading, color = c.text)
+        Spacer(Modifier.height(Space.s))
+        Text(text, style = Type.body, color = c.muted)
     }
 }
 
 @Composable
-private fun QueuedView(otherTitle: String?, onBack: () -> Unit) {
+private fun QueuedView(otherTitle: String?) {
     val c = Theme.colors
     AppCard(Modifier.fillMaxWidth()) {
-        RoundIcon(Ic.Records)
+        EmptyIcon(Ic.Records)
         Spacer(Modifier.height(Space.l))
         Text("В очереди", style = Type.heading, color = c.text)
         Spacer(Modifier.height(Space.s))
@@ -236,6 +272,4 @@ private fun QueuedView(otherTitle: String?, onBack: () -> Unit) {
             style = Type.body, color = c.muted,
         )
     }
-    Spacer(Modifier.height(Space.xl))
-    SecondaryButton("К записям", onBack, Modifier.fillMaxWidth())
 }

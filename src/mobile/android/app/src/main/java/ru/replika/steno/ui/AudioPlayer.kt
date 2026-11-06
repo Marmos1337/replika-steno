@@ -3,6 +3,11 @@ package ru.replika.steno.ui
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -241,9 +246,19 @@ private fun PlayerControls(player: AudioPlayer) {
 @Composable
 private fun SkipButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, enabled: Boolean, onClick: () -> Unit) {
     val c = Theme.colors
-    Box(contentAlignment = Alignment.Center) {
-        IconBtn(icon, description, onClick, enabled = enabled, modifier = Modifier.widthIn(min = Size.touch))
-        // tiny glyph inside the circular arrow, part of the icon rather than of the type scale
-        Text("10", style = Type.labelNum.copy(fontSize = 8.sp, lineHeight = 8.sp), color = if (enabled) c.text else c.muted)
+    val fg = if (enabled) c.text else c.muted.copy(alpha = 0.5f)
+    val back = icon == Ic.Rewind
+    // plain round arrow with «10» next to it (outside the arrow, so nothing overlaps); 48dp touch area
+    Row(
+        Modifier.height(Size.touch).widthIn(min = Size.touch).clip(Radius.pill)
+            .clickable(enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick)
+            .semantics { contentDescription = description }
+            .padding(horizontal = Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        val arrow = @Composable { Icon(icon, null, Modifier.size(Size.icon), tint = fg) }
+        val ten = @Composable { Text("10", style = Type.labelNum, color = fg, modifier = Modifier.clearAndSetSemantics { }) }
+        if (back) { arrow(); Spacer(Modifier.width(Space.xs)); ten() } else { ten(); Spacer(Modifier.width(Space.xs)); arrow() }
     }
 }

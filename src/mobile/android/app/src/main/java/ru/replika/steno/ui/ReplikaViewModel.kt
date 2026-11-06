@@ -31,7 +31,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import ru.replika.steno.ReplikaApp
 import ru.replika.steno.core.Recording
 import ru.replika.steno.core.RecordingState
-import ru.replika.steno.core.displayName
 import ru.replika.steno.data.ThemeMode
 import ru.replika.steno.export.TranscriptJson
 
@@ -41,8 +40,8 @@ enum class ExportFormat(val ext: String, val mime: String) {
 
     fun encode(rec: Recording): String = when (this) {
         JSON -> TranscriptJson.encode(rec)
-        // "[00:12] Имя: текст" with display names, one utterance per line
-        TXT -> rec.utterances.joinToString("\n", postfix = "\n") { "[${fmtTime(it.startMs)}] ${rec.displayName(it.speakerId)}: ${it.text}" }
+        // "[00:12] Имя: текст" with the on-screen labels («Участник 2» when unnamed), one utterance per line
+        TXT -> rec.utterances.joinToString("\n", postfix = "\n") { "[${fmtTime(it.startMs)}] ${rec.label(it.speakerId)}: ${it.text}" }
     }
 }
 
@@ -226,7 +225,7 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
         val clean = name.trim()
         viewModelScope.launch {
             store.update(id) { r ->
-                r.copy(speakerNames = if (clean.isEmpty() || clean == speakerId) r.speakerNames - speakerId else r.speakerNames + (speakerId to clean))
+                r.copy(speakerNames = if (clean.isEmpty() || clean == speakerId || clean == defaultSpeakerLabel(speakerId)) r.speakerNames - speakerId else r.speakerNames + (speakerId to clean))
             }
         }
     }

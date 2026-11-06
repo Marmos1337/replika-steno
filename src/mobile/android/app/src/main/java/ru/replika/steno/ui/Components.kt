@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -259,28 +260,38 @@ fun Hairline(modifier: Modifier = Modifier) {
     Box(modifier.fillMaxWidth().height(Size.stroke).background(Theme.colors.border))
 }
 
-enum class ChipKind { NEUTRAL, ACTIVE, ERROR }
+/** NEUTRAL: waiting/stopped (grey dot); ACTIVE: in progress (text-colored dot); DONE: check mark; ERROR: red dot. */
+enum class ChipKind { NEUTRAL, ACTIVE, DONE, ERROR }
 
+/** Non-interactive status pill; fixed [Size.chip] height so chips of every kind line up. */
 @Composable
 fun StatusChip(text: String, kind: ChipKind = ChipKind.NEUTRAL, modifier: Modifier = Modifier) {
     val c = Theme.colors
     Row(
-        modifier.clip(Radius.pill).background(c.raised).padding(horizontal = Space.m, vertical = Space.xs),
+        modifier.height(Size.chip).clip(Radius.pill).background(c.raised).padding(horizontal = Space.m),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(Size.dot).clip(Radius.pill).background(
-                when (kind) {
-                    ChipKind.NEUTRAL -> c.muted
-                    ChipKind.ACTIVE -> c.text
-                    ChipKind.ERROR -> c.danger
-                },
-            ),
-        )
-        Spacer(Modifier.width(Space.s))
-        Text(text, style = Type.labelNum, color = c.text, maxLines = 1)
+        if (kind == ChipKind.DONE) {
+            Icon(Ic.Check, null, Modifier.size(Space.l), tint = c.text)
+            Spacer(Modifier.width(Space.xs))
+        } else {
+            Box(
+                Modifier.size(Size.dot).clip(Radius.pill).background(
+                    when (kind) {
+                        ChipKind.ACTIVE -> c.text
+                        ChipKind.ERROR -> c.danger
+                        else -> c.muted
+                    },
+                ),
+            )
+            Spacer(Modifier.width(Space.s))
+        }
+        Text(text, style = Type.labelNum, color = c.text, maxLines = 1, softWrap = false)
     }
 }
+
+/** Gives a small control a touch area of at least [Size.touch] in both directions. */
+fun Modifier.touchTarget(): Modifier = this.defaultMinSize(minWidth = Size.touch, minHeight = Size.touch)
 
 /** Equal-width segmented control; the selected pill slides between options. */
 @Composable
@@ -303,7 +314,7 @@ fun <T> Segmented(
         val idx = options.indexOf(selected).coerceAtLeast(0)
         val x by animateDpAsState(w * idx, Motion.move(reduced), label = "seg")
         Box(
-            Modifier.offset(x = x).width(w).fillMaxHeight().clip(Radius.pill).background(c.bg)
+            Modifier.offset(x = x).width(w).fillMaxHeight().clip(Radius.pill).background(c.selected)
                 .border(Size.stroke, c.borderStrong, Radius.pill),
         )
         Row(Modifier.fillMaxSize()) {
@@ -493,10 +504,8 @@ fun EmptyState(
         modifier.padding(horizontal = Space.xl, vertical = Space.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        if (icon == null) LogoSquare(56.dp)
-        else Box(Modifier.size(56.dp).clip(Radius.r14).background(c.surface).border(Size.stroke, c.border, Radius.r14), contentAlignment = Alignment.Center) {
-            Icon(icon, null, Modifier.size(Size.icon), tint = c.text)
-        }
+        // the empty library keeps the product mark (brand moment) at the same tile size
+        if (icon == null) LogoSquare(Size.emptyTile) else EmptyIcon(icon)
         Spacer(Modifier.height(Space.xl))
         Text(title, style = Type.heading, color = c.text, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         Spacer(Modifier.height(Space.s))
@@ -504,6 +513,16 @@ fun EmptyState(
         Spacer(Modifier.height(Space.xl))
         Column(Modifier.widthIn(max = 360.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.s), content = actions)
     }
+}
+
+/** The one tile of empty, error and summary-empty states: 56dp, surface + 1dp border, 24dp icon. */
+@Composable
+fun EmptyIcon(icon: ImageVector, danger: Boolean = false) {
+    val c = Theme.colors
+    Box(
+        Modifier.size(Size.emptyTile).clip(Radius.r14).background(c.surface).border(Size.stroke, c.border, Radius.r14),
+        contentAlignment = Alignment.Center,
+    ) { Icon(icon, null, Modifier.size(Size.iconLarge), tint = if (danger) c.danger else c.text) }
 }
 
 /** Cross-fade between states while the container keeps its size. */

@@ -40,8 +40,10 @@ data class Palette(
     val surface: Color,
     /** Navigation panel background (light grey in the light theme). */
     val nav: Color,
-    /** Pressed/selected surfaces and chips: two steps off. */
+    /** Pressed surfaces and chips: two steps off. */
     val raised: Color,
+    /** The selected item of the drawer and of segmented controls (always with a 1dp border). */
+    val selected: Color,
     /** Hairline borders. */
     val border: Color,
     /** Stronger outline (logo pill, focused field). */
@@ -70,6 +72,7 @@ val DarkPalette = Palette(
     surface = Color(0xFF151517),
     nav = Color(0xFF111113),
     raised = Color(0xFF1F1F22),
+    selected = Color(0xFF232326),
     border = Color(0x1AFFFFFF),
     borderStrong = Color(0x33FFFFFF),
     text = Color(0xFFF2F2F3),
@@ -92,6 +95,7 @@ val LightPalette = Palette(
     surface = Color(0xFFF6F6F7),
     nav = Color(0xFFF3F3F4),
     raised = Color(0xFFECECEE),
+    selected = Color(0xFFFFFFFF),
     border = Color(0x14000000),
     borderStrong = Color(0x29000000),
     text = Color(0xFF111113),
@@ -131,13 +135,21 @@ object Radius {
 /** Fixed sizes that several screens share. */
 object Size {
     val touch = 48.dp
-    val topBar = 64.dp
+    val topBar = 56.dp
     val icon = 22.dp
+    /** Icon inside the 56dp empty/error tile. */
+    val iconLarge = 24.dp
+    /** Tile of empty, error and summary-empty states. */
+    val emptyTile = 56.dp
+    /** Visual height of small pills (status, time, speaker chips); their touch area stays [touch]. */
+    val chip = 28.dp
+    /** Fade above the bottom action bar. */
+    val fade = 24.dp
     val iconSmall = 18.dp
     val logo = 40.dp
     val drawerWide = 280.dp
     val rail = 80.dp
-    val contentMax = 760.dp
+    val contentMax = 720.dp
     val stroke = 1.dp
     val progress = 6.dp
     val dot = 8.dp
@@ -165,6 +177,9 @@ object Type {
     val body = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 22.sp)
     val bodyStrong = body.copy(fontWeight = FontWeight.SemiBold)
     val label = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 13.sp, lineHeight = 18.sp)
+    /** Speaker name and time above an utterance. */
+    val speaker = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, lineHeight = 20.sp)
+    val speakerTime = speaker.copy(fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum")
     /** Tabular figures for timers and timestamps, so digits do not jitter. */
     val labelNum = label.copy(fontFeatureSettings = "tnum")
     val bodyNum = body.copy(fontFeatureSettings = "tnum")

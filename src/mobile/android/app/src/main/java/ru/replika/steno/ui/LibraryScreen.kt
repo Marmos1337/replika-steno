@@ -20,6 +20,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,7 +51,7 @@ import ru.replika.steno.ui.theme.Space
 import ru.replika.steno.ui.theme.Theme
 import ru.replika.steno.ui.theme.Type
 
-private val AUDIO_TYPES = arrayOf("audio/*", "video/mp4", "application/ogg")
+internal val AUDIO_TYPES = arrayOf("audio/*", "video/mp4", "application/ogg")
 
 @Composable
 fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
@@ -74,11 +78,18 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
         }
     }
 
+    val listState = rememberLazyListState()
+    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    // Height the bottom action bar covers: fade + button + bottom padding + system navigation bar.
+    val barHeight = Size.fade + Size.touch + Space.l + navBottom
+
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             TopBar(
                 leading = if (wide) null else ({ IconBtn(Ic.Menu, "Открыть меню", onMenu) }),
+                side = side,
+                divider = items.isNotEmpty() && filtered.isNotEmpty() && listState.canScrollBackward,
             )
             Column(Modifier.padding(horizontal = side)) {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -97,21 +108,18 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     !loaded -> Unit
-                    items.isEmpty() -> Column(
-                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        EmptyState(
-                            title = "Пока нет записей",
-                            text = "Выберите запись встречи — Реплика разделит её по говорящим и расшифрует прямо на телефоне.",
-                        ) {
-                            PrimaryButton(if (importing) "Копирую файл…" else "Импортировать аудио", pick, Modifier.fillMaxWidth(), Ic.File, enabled = !importing)
-                            SecondaryButton("Записать с микрофона", { micOpen = true }, Modifier.fillMaxWidth(), Ic.Mic)
+                    // Only the mark, a title and one line; the actions live in the bottom bar, as with a list.
+                    // centred in the space above the bar; scrolls only if the screen is too short
+                    items.isEmpty() -> Box(Modifier.fillMaxSize().padding(bottom = barHeight), contentAlignment = Alignment.Center) {
+                        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                            EmptyState(
+                                title = "Пока нет записей",
+                                text = "Импортируйте запись встречи или запишите её с микрофона.",
+                            )
                         }
                     }
                     filtered.isEmpty() -> Column(
-                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = barHeight),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         EmptyState("Ничего не нашлось", "Нет записей, где встречается «${query.trim()}».", icon = Ic.Search) {
@@ -120,8 +128,10 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                     }
                     else -> LazyColumn(
                         Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(start = side, end = side, bottom = Size.bottomBar + Space.xxl + Space.xl),
-                        verticalArrangement = Arrangement.spacedBy(Space.m),
+                        state = listState,
+                        // the last card scrolls fully above the bar
+                        contentPadding = PaddingValues(start = side, end = side, bottom = barHeight + Space.s),
+                        verticalArrangement = Arrangement.spacedBy(Space.s),
                     ) {
                         items(filtered, key = { it.id }) { r ->
                             RecordingRow(
@@ -139,18 +149,18 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
             }
         }
 
-        // Bottom action bar: always reachable while there are recordings. Fades into the page, no seam.
-        if (loaded && items.isNotEmpty()) {
-            Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    .background(Brush.verticalGradient(0f to c.bg.copy(alpha = 0f), 0.35f to c.bg))
-                    .navigationBarsPadding()
-                    .padding(start = side, end = side, top = Space.xl, bottom = Space.l),
+        // Bottom action bar: the same place in the empty state and with a list. A 24dp fade on top,
+        // then a solid strip of the page color, so cards slide under it without a seam.
+        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+            Box(Modifier.fillMaxWidth().height(Size.fade).background(Brush.verticalGradient(listOf(c.bg.copy(alpha = 0f), c.bg))))
+            Row(
+                Modifier.fillMaxWidth().background(c.bg).navigationBarsPadding()
+                    .padding(start = side, end = side, bottom = Space.l),
+                horizontalArrangement = Arrangement.spacedBy(Space.s),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
-                    PrimaryButton(if (importing) "Копирую файл…" else "Импортировать аудио", pick, Modifier.weight(1f), Ic.File, enabled = !importing)
-                    OutlineIconButton(Ic.Mic, "Записать с микрофона", { micOpen = true })
-                }
+                PrimaryButton(if (importing) "Копирую файл…" else "Импортировать аудио", pick, Modifier.weight(1f), Ic.File, enabled = !importing)
+                OutlineIconButton(Ic.Mic, "Записать с микрофона", { micOpen = true })
             }
         }
     }
@@ -185,21 +195,41 @@ private fun RecordingRow(
 ) {
     val c = Theme.colors
     var menu by remember { mutableStateOf(false) }
+    val mine = job?.takeIf { it.recordingId == r.id }
+    // Compact card: title, one meta line, status on the right, ⋮ with a 4dp inset (as in the top bar).
     AppCard(
         modifier.fillMaxWidth(),
         onClick = onOpen,
         onLongClick = { menu = true },
-        padding = PaddingValues(start = Space.l, end = Space.xs, top = Space.xs, bottom = Space.l),
+        padding = PaddingValues(start = Space.l, end = Space.xs, top = Space.m, bottom = Space.m),
     ) {
-        Row {
-            Column(Modifier.weight(1f).padding(top = Space.m)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
                 Text(r.title, style = Type.bodyStrong, color = c.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(Space.xs))
                 val meta = buildList {
                     add(fmtDate(r.createdAtMs))
                     if (r.durationMs > 0) add(fmtTime(r.durationMs))
+                    if (r.state == RecordingState.READY) {
+                        add(plural(r.utterances.asSequence().map { it.speakerId }.distinct().count(), "участник", "участника", "участников"))
+                    }
                 }.joinToString(" · ")
-                Text(meta, style = Type.labelNum, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(meta, style = Type.labelNum, color = c.muted)
+            }
+            Spacer(Modifier.width(Space.s))
+            when (r.state) {
+                RecordingState.READY -> if (r.llmPending) StatusChip("Итоги готовятся", ChipKind.ACTIVE) else StatusChip("Готово", ChipKind.DONE)
+                RecordingState.PROCESSING -> StatusChip(
+                    if (mine != null) "${(transcriptProgress(mine.progress) * 100).toInt()}%" else "Обработка",
+                    ChipKind.ACTIVE,
+                )
+                RecordingState.FAILED -> when (failureKind(r.error)) {
+                    FailureKind.STOPPED -> StatusChip("Остановлено")
+                    FailureKind.NO_SPEECH -> StatusChip("Нет речи", ChipKind.ERROR)
+                    FailureKind.CORRUPT -> StatusChip("Файл повреждён", ChipKind.ERROR)
+                    FailureKind.OTHER -> StatusChip("Ошибка", ChipKind.ERROR)
+                }
+                RecordingState.NEW -> StatusChip("В очереди")
             }
             Box {
                 IconBtn(Ic.More, "Действия с записью", { menu = true }, tint = c.muted)
@@ -209,30 +239,6 @@ private fun RecordingRow(
                         MenuEntry("Обработать заново", Ic.Refresh, onClick = onRerun),
                         MenuEntry("Удалить", Ic.Trash, danger = true, onClick = onDelete),
                     ),
-                )
-            }
-        }
-        Spacer(Modifier.height(Space.m))
-        Row(Modifier.padding(end = Space.m), verticalAlignment = Alignment.CenterVertically) {
-            val mine = job?.takeIf { it.recordingId == r.id }
-            when (r.state) {
-                RecordingState.READY -> if (r.llmPending) StatusChip("Итоги готовятся", ChipKind.ACTIVE) else StatusChip("Готово")
-                RecordingState.PROCESSING -> StatusChip(
-                    if (mine != null) "Обработка ${(transcriptProgress(mine.progress) * 100).toInt()}%" else "Обработка",
-                    ChipKind.ACTIVE,
-                )
-                RecordingState.FAILED -> StatusChip("Ошибка", ChipKind.ERROR)
-                RecordingState.NEW -> StatusChip("В очереди")
-            }
-            Spacer(Modifier.weight(1f))
-            if (r.state == RecordingState.READY) {
-                val speakers = r.utterances.asSequence().map { it.speakerId }.distinct().count()
-                Text(plural(speakers, "участник", "участника", "участников"), style = Type.label, color = c.muted, maxLines = 1)
-            } else if (r.state == RecordingState.PROCESSING && mine != null) {
-                CircularProgressIndicator(
-                    progress = { transcriptProgress(mine.progress) },
-                    modifier = Modifier.width(Size.iconSmall).height(Size.iconSmall),
-                    color = c.text, trackColor = c.raised, strokeWidth = 2.dp,
                 )
             }
         }

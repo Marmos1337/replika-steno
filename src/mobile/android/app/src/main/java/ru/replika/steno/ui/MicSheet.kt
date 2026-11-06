@@ -259,13 +259,7 @@ private fun CenterNote(text: String) {
 }
 
 @Composable
-fun RoundIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, danger: Boolean = false) {
-    val c = Theme.colors
-    Box(
-        Modifier.size(56.dp).clip(Radius.r14).background(c.bg).border(Size.stroke, c.border, Radius.r14),
-        contentAlignment = Alignment.Center,
-    ) { Icon(icon, null, Modifier.size(Size.icon), tint = if (danger) c.danger else c.text) }
-}
+fun RoundIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, danger: Boolean = false) = EmptyIcon(icon, danger)
 
 fun Context.findActivity(): Activity? {
     var c: Context? = this

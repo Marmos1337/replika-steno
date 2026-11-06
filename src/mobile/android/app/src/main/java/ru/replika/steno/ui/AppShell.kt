@@ -2,12 +2,18 @@ package ru.replika.steno.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -44,10 +50,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -139,13 +148,34 @@ private fun DrawerPanel(
 ) {
     val c = Theme.colors
     Column(Modifier.fillMaxHeight().systemBarsPadding().padding(Space.l)) {
-        // Logo area holds the collapse/expand control (always visible: there is no hover on touch).
+        // Logo area: the mark sits in the same 48dp slot in both states. Collapsed, the mark itself expands
+        // the rail; on press or focus it cross-fades into the expand icon so the action is readable.
         Row(Modifier.fillMaxWidth().height(Size.touch), verticalAlignment = Alignment.CenterVertically) {
             if (collapsed) {
-                IconBtn(Ic.Expand, "Развернуть меню", onToggle, tint = c.muted)
+                val source = remember { MutableInteractionSource() }
+                val pressed by source.collectIsPressedAsState()
+                val focused by source.collectIsFocusedAsState()
+                val hovered by source.collectIsHoveredAsState()
+                Box(
+                    Modifier.size(Size.touch).clip(Radius.r10)
+                        .clickable(interactionSource = source, indication = null, role = Role.Button, onClickLabel = "Развернуть меню", onClick = onToggle)
+                        .semantics { contentDescription = "Развернуть меню" },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Crossfade(pressed || focused || hovered, animationSpec = Motion.spec(Theme.reducedMotion, Motion.FAST), label = "railMark") { hint ->
+                        Box(Modifier.size(Size.logo), contentAlignment = Alignment.Center) {
+                            if (hint) {
+                                Box(
+                                    Modifier.size(Size.logo).clip(Radius.r10).background(c.selected).border(Size.stroke, c.borderStrong, Radius.r10),
+                                    contentAlignment = Alignment.Center,
+                                ) { Icon(Ic.Expand, null, Modifier.size(Size.icon), tint = c.text) }
+                            } else LogoSquare()
+                        }
+                    }
+                }
             } else {
-                LogoSquare()
-                Spacer(Modifier.width(Space.s))
+                Box(Modifier.size(Size.touch), contentAlignment = Alignment.Center) { LogoSquare() }
+                Spacer(Modifier.width(Space.xs))
                 LogoWord()
                 Spacer(Modifier.weight(1f))
                 IconBtn(Ic.Collapse, if (modal) "Закрыть меню" else "Свернуть меню", onToggle, tint = c.muted)
@@ -198,8 +228,8 @@ private fun NavItem(icon: ImageVector, label: String, selected: Boolean, collaps
     val c = Theme.colors
     Row(
         Modifier.fillMaxWidth().height(Size.touch).clip(Radius.pill)
-            .background(if (selected) c.bg else c.nav)
-            .then(if (selected) Modifier.border(Size.stroke, c.border, Radius.pill) else Modifier)
+            .background(if (selected) c.selected else c.nav)
+            .then(if (selected) Modifier.border(Size.stroke, c.borderStrong, Radius.pill) else Modifier)
             .clickable(role = Role.Tab, onClickLabel = label, onClick = onClick)
             .padding(horizontal = Space.m),
         verticalAlignment = Alignment.CenterVertically,
@@ -213,25 +243,40 @@ private fun NavItem(icon: ImageVector, label: String, selected: Boolean, collaps
     }
 }
 
-/** Top row of a screen: leading control, optional title, trailing actions. */
+/**
+ * Top row of a screen: leading control, optional title, trailing actions.
+ * [side] is the screen's content gutter: the 48dp buttons sit so their glyphs line up with the content
+ * column edges (the same inset as the ⋮ of utterance rows). [divider] shows a hairline under the bar
+ * while content is scrolled beneath it.
+ */
 @Composable
 fun TopBar(
     leading: (@Composable () -> Unit)?,
+    side: Dp = Space.l,
+    divider: Boolean = false,
     title: String? = null,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
-    Row(
-        Modifier.fillMaxWidth().height(Size.topBar).padding(horizontal = Space.xs),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (leading != null) leading() else Spacer(Modifier.width(Space.m))
-        if (title != null) {
-            Text(title, style = Type.heading, color = Theme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).padding(horizontal = Space.xs))
-        } else Spacer(Modifier.weight(1f))
-        Row(horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
+    val c = Theme.colors
+    val line by animateFloatAsState(if (divider) 1f else 0f, Motion.spec(Theme.reducedMotion, Motion.FAST), label = "topDivider")
+    Box(Modifier.fillMaxWidth().height(Size.topBar)) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = barInset(side)),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (leading != null) leading() else Spacer(Modifier.width(Space.m))
+            if (title != null) {
+                Text(title, style = Type.heading, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).padding(horizontal = Space.xs))
+            } else Spacer(Modifier.weight(1f))
+            Row(horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
+        }
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(Size.stroke).alpha(line).background(c.border))
     }
 }
+
+/** Inset of a row of 48dp icon buttons so the buttons' glyphs line up with the content gutter. */
+fun barInset(side: Dp): Dp = (side - Space.m).coerceAtLeast(Space.xs)
 
 /** Side gutter that keeps the content column at most [Size.contentMax] wide and centered. */
 fun gutter(maxWidth: Dp): Dp = maxOf(Space.l, (maxWidth - Size.contentMax) / 2)
