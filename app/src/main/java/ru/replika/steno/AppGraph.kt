@@ -64,63 +64,96 @@ class AppGraph(private val context: Context) {
 
     private suspend fun process(id: String) {
         val audioFile = store.audioFile(id)
-        store.update(id) { it.copy(state = RecordingState.PROCESSING, error = null) }
+        store.update(id) { it.copy(state = RecordingState.PROCESSING, error = null, llmPending = false, llmNote = null) }
         fun report(p: Progress, note: String? = null) = _job.update { ActiveJob(id, p, note) }
+        var transcriptReady = false
         try {
             report(Progress(Stage.DECODE, 0f), "Подготовка моделей")
-            val (rec, dia, fmt) = engines { report(Progress(Stage.DECODE, 0f), it) }
-            var t0 = SystemClock.elapsedRealtime()
+            val (rec, dia) = asrEngines { report(Progress(Stage.DECODE, 0f), it) }
+            val t0 = SystemClock.elapsedRealtime()
             val audio = AudioDecoder.decode(context, android.net.Uri.fromFile(audioFile)) { report(Progress(Stage.DECODE, it)) }
             val decodeMs = SystemClock.elapsedRealtime() - t0
             store.update(id) { it.copy(durationMs = audio.durationMs) }
-            val result = withContext(Dispatchers.Default) {
-                Pipeline(dia, rec, fmt).run(audio, decodeMs) { report(it) }
-            }
+
+            // phase 1: transcript - shown to the user as soon as it is ready
+            val result = withContext(Dispatchers.Default) { Pipeline(dia, rec, null).transcribe(audio, decodeMs) { report(it) } }
             store.update(id) {
                 it.copy(
                     state = RecordingState.READY,
                     utterances = result.utterances,
                     durationMs = result.durationMs,
-                    summary = result.summary,
+                    summary = null,
                     metrics = result.metrics,
+                    llmPending = true,
                     // a re-run keeps names the user already gave, as long as the ids still exist
                     speakerNames = it.speakerNames.filterKeys { k -> result.utterances.any { u -> u.speakerId == k } },
                 )
             }
-            Log.i(TAG, "done $id: ${result.metrics}")
+            transcriptReady = true
+            Log.i(TAG, "transcript $id: ${result.metrics}")
+
+            // phase 2: local LLM - punctuation/case (guarded) and the meeting summary
+            report(Progress(Stage.FORMAT, 0f), "Загрузка языковой модели")
+            val fmt = llmEngine()
+            val llm = withContext(Dispatchers.Default) { Pipeline(dia, rec, fmt).polish(result.utterances) { report(it) } }
+            store.update(id) { cur ->
+                // keep anything the user edited while the LLM was working
+                val merged = cur.utterances.mapIndexed { i, u ->
+                    val original = result.utterances.getOrNull(i)
+                    val polished = llm.utterances.getOrNull(i)
+                    if (original != null && polished != null && !u.edited && u.text == original.text) u.copy(text = polished.text) else u
+                }
+                cur.copy(
+                    utterances = merged,
+                    summary = llm.summary,
+                    llmPending = false,
+                    llmNote = when {
+                        fmt == null -> "Языковая модель недоступна: $llmStatus."
+                        llm.summary == null -> "Модель не нашла в записи пунктов для итогов."
+                        else -> null
+                    },
+                    metrics = cur.metrics?.copy(llmMs = llm.llmMs),
+                )
+            }
+            Log.i(TAG, "llm $id: ${llm.llmMs} ms")
         } catch (e: CancellationException) {
-            store.update(id) { it.copy(state = RecordingState.FAILED, error = "Обработка отменена.") }
+            if (transcriptReady) store.update(id) { it.copy(llmPending = false, llmNote = "Оформление и итоги отменены.") }
+            else store.update(id) { it.copy(state = RecordingState.FAILED, error = "Обработка отменена.") }
         } catch (e: NoSpeechException) {
             store.update(id) { it.copy(state = RecordingState.FAILED, error = "В записи не найдено речи. Проверьте, что файл не пустой и голос слышно.") }
         } catch (e: AudioDecodeException) {
             store.update(id) { it.copy(state = RecordingState.FAILED, error = e.message) }
         } catch (e: OutOfMemoryError) {
-            store.update(id) { it.copy(state = RecordingState.FAILED, error = "Не хватило памяти устройства для этой записи. Попробуйте файл короче.") }
+            if (transcriptReady) store.update(id) { it.copy(llmPending = false, llmNote = "Не хватило памяти для языковой модели.") }
+            else store.update(id) { it.copy(state = RecordingState.FAILED, error = "Не хватило памяти устройства для этой записи. Попробуйте файл короче.") }
         } catch (e: Throwable) {
             Log.e(TAG, "processing failed", e)
-            store.update(id) { it.copy(state = RecordingState.FAILED, error = "Не удалось обработать запись: ${e.message ?: e.javaClass.simpleName}") }
+            if (transcriptReady) store.update(id) { it.copy(llmPending = false, llmNote = "Итоги не построены: ${e.message ?: e.javaClass.simpleName}") }
+            else store.update(id) { it.copy(state = RecordingState.FAILED, error = "Не удалось обработать запись: ${e.message ?: e.javaClass.simpleName}") }
         } finally {
             _job.value = null
         }
     }
 
-    private suspend fun engines(note: (String) -> Unit): Triple<SherpaRecognizer, VadDiarizer, LlmFormatter?> =
+    private suspend fun asrEngines(note: (String) -> Unit): Pair<SherpaRecognizer, VadDiarizer> =
         engineLock.withLock {
             withContext(Dispatchers.IO) {
                 val r = recognizer ?: run { note("Загрузка модели распознавания"); SherpaRecognizer(context.assets) }.also { recognizer = it }
                 val d = diarizer ?: run { note("Загрузка модели голосов"); VadDiarizer(context.assets) }.also { diarizer = it }
-                val wantLlm = settings.llmEnabled.first()
-                val l = if (!wantLlm) {
-                    llmStatus = "выключена в настройках"; null
-                } else llm ?: runCatching {
-                    note("Загрузка языковой модели")
-                    LlmFormatter.create(context)
-                }.onSuccess { llmStatus = "работает"; llm = it }
-                    .onFailure { llmStatus = "не загрузилась: ${it.message ?: it.javaClass.simpleName}"; Log.e(TAG, "llm", it) }
-                    .getOrNull()
-                Triple(r, d, l)
+                r to d
             }
         }
+
+    private suspend fun llmEngine(): LlmFormatter? = engineLock.withLock {
+        withContext(Dispatchers.IO) {
+            if (!settings.llmEnabled.first()) {
+                llmStatus = "выключена в настройках"; null
+            } else llm ?: runCatching { LlmFormatter.create(context) }
+                .onSuccess { llmStatus = "работает"; llm = it }
+                .onFailure { llmStatus = "не загрузилась: ${it.message ?: it.javaClass.simpleName}"; Log.e(TAG, "llm", it) }
+                .getOrNull()
+        }
+    }
 
     companion object { private const val TAG = "Replika" }
 }

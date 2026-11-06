@@ -5,11 +5,11 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.ensureActive
 
 enum class Stage(val title: String, val weight: Float) {
-    DECODE("Чтение аудио", 0.05f),
-    DIARIZE("Разделение говорящих", 0.30f),
-    RECOGNIZE("Распознавание речи", 0.45f),
-    FORMAT("Оформление текста (LLM)", 0.15f),
-    SUMMARY("Итоги встречи", 0.05f),
+    DECODE("Подготовка", 0.05f),
+    DIARIZE("Участники", 0.25f),
+    RECOGNIZE("Распознавание", 0.40f),
+    FORMAT("Подготовка результата", 0.20f),
+    SUMMARY("Итоги встречи", 0.10f),
 }
 
 data class Progress(val stage: Stage, val stageFraction: Float) {
@@ -26,17 +26,19 @@ data class Progress(val stage: Stage, val stageFraction: Float) {
 
 class NoSpeechException : Exception("В записи не найдено речи.")
 
-data class PipelineResult(
+data class TranscriptResult(
     val utterances: List<Utterance>,
     val durationMs: Long,
-    val summary: MeetingSummary?,
     val metrics: ProcessingMetrics,
 )
 
+data class LlmResult(val utterances: List<Utterance>, val summary: MeetingSummary?, val llmMs: Long)
+
 /**
- * import -> decode -> diarize (audio embeddings + clustering) -> ASR per speaker turn -> LLM formatting
- * -> summary. Speaker ids and time boundaries come only from the diarizer; the LLM can touch text only,
- * and only through [TextGuard].
+ * Phase 1 (what the user waits for): decode -> diarize (VAD + voice embeddings + clustering) ->
+ * ASR per speaker turn. Phase 2 runs after the transcript is already shown: LLM formatting + summary.
+ * Speaker ids and time boundaries come only from the diarizer; the LLM can touch text only, and only
+ * through [TextGuard].
  */
 class Pipeline(
     private val diarizer: Diarizer,
@@ -44,11 +46,10 @@ class Pipeline(
     private val formatter: Formatter?,
 ) {
 
-    suspend fun run(audio: DecodedAudio, decodeMs: Long, onProgress: (Progress) -> Unit): PipelineResult {
+    suspend fun transcribe(audio: DecodedAudio, decodeMs: Long, onProgress: (Progress) -> Unit): TranscriptResult {
         val sr = DecodedAudio.SAMPLE_RATE
         val durationMs = audio.durationMs
 
-        // 1. diarization
         var t0 = SystemClock.elapsedRealtime()
         onProgress(Progress(Stage.DIARIZE, 0f))
         val rawTurns = diarizer.diarize(audio.samples, sr) { onProgress(Progress(Stage.DIARIZE, it)) }
@@ -57,7 +58,6 @@ class Pipeline(
         if (turns.isEmpty()) throw NoSpeechException()
         val ids = Segments.speakerIds(turns)
 
-        // 2. recognition, per turn (split long turns at quiet points)
         t0 = SystemClock.elapsedRealtime()
         val pieces = turns.flatMap { Segments.splitForAsr(it, audio.samples, sr) }
         val utterances = ArrayList<Utterance>(pieces.size)
@@ -66,26 +66,24 @@ class Pipeline(
             val r = recognizer.recognize(Segments.slice(audio.samples, sr, p.startMs, p.endMs), sr)
             val text = r.text.trim()
             if (text.isNotEmpty()) {
-                utterances += Utterance(ids.getValue(p.cluster), p.startMs, p.endMs, text, text, p.confidence, r.lang)
+                utterances += Utterance(ids.getValue(p.cluster), p.startMs, p.endMs, text, text, p.confidence, lang = r.lang)
             }
             onProgress(Progress(Stage.RECOGNIZE, (i + 1f) / pieces.size))
         }
         val asrMs = SystemClock.elapsedRealtime() - t0
         if (utterances.isEmpty()) throw NoSpeechException()
+        // ids by first appearance among the utterances that actually have text
+        val remap = LinkedHashMap<String, String>()
+        utterances.forEach { u -> remap.getOrPut(u.speakerId) { "speaker_${remap.size + 1}" } }
+        val finalUtts = utterances.map { it.copy(speakerId = remap.getValue(it.speakerId)) }
+        return TranscriptResult(finalUtts, durationMs, ProcessingMetrics(durationMs, decodeMs, diarMs, asrMs, 0))
+    }
 
-        // 3. LLM formatting (text only, guarded)
-        t0 = SystemClock.elapsedRealtime()
-        val formatted = format(utterances, onProgress)
-        // 4. summary with references back to utterances
+    suspend fun polish(utts: List<Utterance>, onProgress: (Progress) -> Unit): LlmResult {
+        val t0 = SystemClock.elapsedRealtime()
+        val formatted = format(utts, onProgress)
         val summary = summarize(formatted, onProgress)
-        val llmMs = SystemClock.elapsedRealtime() - t0
-
-        return PipelineResult(
-            utterances = formatted,
-            durationMs = durationMs,
-            summary = summary,
-            metrics = ProcessingMetrics(durationMs, decodeMs, diarMs, asrMs, llmMs),
-        )
+        return LlmResult(formatted, summary, SystemClock.elapsedRealtime() - t0)
     }
 
     private suspend fun format(utts: List<Utterance>, onProgress: (Progress) -> Unit): List<Utterance> {
@@ -122,6 +120,7 @@ class Pipeline(
                 val part = SummaryParser.parse(answer, utts)
                 part.points.filterTo(points) { p -> points.none { it.text.equals(p.text, ignoreCase = true) } }
                 part.actions.filterTo(actions) { a -> actions.none { it.text.equals(a.text, ignoreCase = true) } }
+                points.sortBy { it.kind.ordinal }
             }
             onProgress(Progress(Stage.SUMMARY, (i + 1f) / windows.size))
         }

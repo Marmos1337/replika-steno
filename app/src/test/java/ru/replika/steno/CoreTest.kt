@@ -117,3 +117,32 @@ class LanguageRoutingTest {
         assertEquals(0f, ru.replika.steno.asr.SherpaRecognizer.latinShare("123 ..."))
     }
 }
+
+class ActionGuardTest {
+    private val utts = listOf(
+        ru.replika.steno.core.Utterance("speaker_1", 0, 1000, "Ещё нужно подготовить описание для магазина приложений."),
+        ru.replika.steno.core.Utterance("speaker_2", 1000, 2000, "Описание напишет Марина, я ей передам скриншоты в среду."),
+    )
+
+    @Test fun assigneeAndDueOnlyWhenSpoken() {
+        val s = ru.replika.steno.core.SummaryParser.parse(
+            """
+            КРАТКО:
+            - Обсудили описание для магазина [1, 2]
+            РЕШЕНИЯ:
+            - Описание пишет Марина [2]
+            ВОПРОСЫ:
+            ПОРУЧЕНИЯ:
+            - Написать описание | Марина | - [2]
+            - Передать скриншоты | Иван | в среду [2]
+            - Подготовить описание | - | завтра [1]
+            """.trimIndent(), utts,
+        )
+        assertEquals(2, s.points.size)
+        assertEquals(ru.replika.steno.core.PointKind.DECISION, s.points[1].kind)
+        assertEquals(3, s.actions.size)
+        assertEquals("Марина", s.actions[0].assignee); assertEquals(null, s.actions[0].due)
+        assertEquals(null, s.actions[1].assignee); assertEquals("в среду", s.actions[1].due)   // Иван never said
+        assertEquals(null, s.actions[2].due)                                                    // «завтра» never said
+    }
+}

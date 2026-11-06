@@ -61,7 +61,7 @@ def normalize(turns, dur, min_ms=250, gap=600):
     return out
 
 def main():
-    path = sys.argv[1]; thr = float(sys.argv[2]) if len(sys.argv) > 2 else 0.6
+    path = sys.argv[1]; thr = float(sys.argv[2]) if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else 0.6
     x = load(path); dur = len(x) * 1000 // SR
     t0 = time.time()
     ph = vad_phrases(x)
@@ -83,5 +83,8 @@ def main():
     t2 = time.time()
     print(f"# audio {dur/1000:.1f}s  diar {t1-t0:.2f}s  asr {t2-t1:.2f}s  speakers {len(ids)}  utterances {len(res)}  phrases {len(ph)}")
     for r in res: print(f"  {r['speaker_id']} {r['start_ms']:>6}-{r['end_ms']:>6} c={r['_conf']:.2f}  {r['text']}")
+    if "--out" in sys.argv:
+        json.dump({"transcript": [{k: v for k, v in r.items() if not k.startswith("_")} for r in res]},
+                  open(sys.argv[sys.argv.index("--out") + 1], "w"), ensure_ascii=False, indent=1)
 
 main()

@@ -15,6 +15,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import ru.replika.steno.core.ActionItem
 import ru.replika.steno.core.MeetingSummary
+import ru.replika.steno.core.PointKind
 import ru.replika.steno.core.ProcessingMetrics
 import ru.replika.steno.core.Recording
 import ru.replika.steno.core.RecordingState
@@ -39,7 +40,11 @@ class RecordingStore(private val context: Context) {
             runCatching { fromJson(JSONObject(File(dir, META).readText())) }.getOrNull()
         }.map {
             // a run interrupted by process death cannot resume half-way: mark it so the user can restart it
-            if (it.state == RecordingState.PROCESSING) it.copy(state = RecordingState.FAILED, error = "Обработка была прервана. Запустите её снова.") else it
+            when {
+                it.state == RecordingState.PROCESSING -> it.copy(state = RecordingState.FAILED, error = "Обработка была прервана. Запустите её снова.")
+                it.llmPending -> it.copy(llmPending = false, llmNote = "Итоги не достроены: приложение было закрыто. Запустите обработку снова.")
+                else -> it
+            }
         }
         _items.value = list.sortedByDescending { it.createdAtMs }
         _loaded.value = true
@@ -127,15 +132,18 @@ class RecordingStore(private val context: Context) {
             r.summary?.let { s ->
                 put("summary", JSONObject().apply {
                     put("points", JSONArray().apply {
-                        s.points.forEach { p -> put(JSONObject().put("text", p.text).put("refs", JSONArray(p.utteranceIndices))) }
+                        s.points.forEach { p -> put(JSONObject().put("text", p.text).put("refs", JSONArray(p.utteranceIndices)).put("kind", p.kind.name)) }
                     })
                     put("actions", JSONArray().apply {
                         s.actions.forEach { a ->
-                            put(JSONObject().put("text", a.text).put("speakerId", a.speakerId ?: JSONObject.NULL).put("ref", a.utteranceIndex))
+                            put(JSONObject().put("text", a.text).put("speakerId", a.speakerId ?: JSONObject.NULL).put("ref", a.utteranceIndex)
+                                .put("assignee", a.assignee ?: JSONObject.NULL).put("due", a.due ?: JSONObject.NULL).put("confirmed", a.confirmed))
                         }
                     })
                 })
             }
+            put("llmPending", r.llmPending)
+            r.llmNote?.let { put("llmNote", it) }
             r.metrics?.let { m ->
                 put("metrics", JSONObject().apply {
                     put("audioDurationMs", m.audioDurationMs); put("decodeMs", m.decodeMs)
@@ -167,13 +175,23 @@ class RecordingStore(private val context: Context) {
                         (0 until a.length()).map { i ->
                             val p = a.getJSONObject(i)
                             val refs = p.getJSONArray("refs")
-                            SummaryPoint(p.getString("text"), (0 until refs.length()).map { refs.getInt(it) })
+                            SummaryPoint(
+                                p.getString("text"), (0 until refs.length()).map { refs.getInt(it) },
+                                runCatching { PointKind.valueOf(p.optString("kind")) }.getOrDefault(PointKind.SUMMARY),
+                            )
                         }
                     } ?: emptyList(),
                     actions = s.optJSONArray("actions")?.let { a ->
                         (0 until a.length()).map { i ->
                             val x = a.getJSONObject(i)
-                            ActionItem(x.getString("text"), if (x.isNull("speakerId")) null else x.getString("speakerId"), x.getInt("ref"))
+                            ActionItem(
+                                text = x.getString("text"),
+                                speakerId = if (x.isNull("speakerId")) null else x.getString("speakerId"),
+                                utteranceIndex = x.getInt("ref"),
+                                assignee = if (x.has("assignee") && !x.isNull("assignee")) x.getString("assignee") else null,
+                                due = if (x.has("due") && !x.isNull("due")) x.getString("due") else null,
+                                confirmed = x.optBoolean("confirmed", false),
+                            )
                         }
                     } ?: emptyList(),
                 )
@@ -188,6 +206,8 @@ class RecordingStore(private val context: Context) {
                 state = runCatching { RecordingState.valueOf(o.getString("state")) }.getOrDefault(RecordingState.NEW),
                 error = if (o.has("error")) o.getString("error") else null,
                 summary = summary, metrics = metrics,
+                llmPending = o.optBoolean("llmPending", false),
+                llmNote = if (o.has("llmNote")) o.getString("llmNote") else null,
             )
         }
     }
