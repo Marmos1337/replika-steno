@@ -5,7 +5,7 @@ import json, subprocess, sys, time
 import numpy as np
 import sherpa_onnx
 
-M = __file__.rsplit("/tools/", 1)[0] + "/app/src/main/assets/models"
+M = __file__.rsplit("/tools/", 1)[0] + "/src/mobile/android/app/src/main/assets/models"
 SR = 16000
 PAD_MS = int(__import__("os").environ.get("PAD_MS", "400"))
 

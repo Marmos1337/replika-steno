@@ -1,11 +1,12 @@
 #!/bin/sh
 # Downloads the engines and models that get bundled into the APK.
-# Everything ends up in app/libs (engines) and app/src/main/assets/models (models).
+# Everything ends up in src/mobile/android/app/libs (engine) and .../assets/models (models).
 set -eu
 cd "$(dirname "$0")/.."
 CACHE=models-cache
-ASSETS=app/src/main/assets/models
-mkdir -p "$CACHE" "$ASSETS/asr" "$ASSETS/asr_en" "$ASSETS/diar" "$ASSETS/llm" app/libs
+APP=src/mobile/android/app
+ASSETS=$APP/src/main/assets/models
+mkdir -p "$CACHE" "$ASSETS/asr" "$ASSETS/asr_en" "$ASSETS/diar" "$ASSETS/llm" "$APP/libs"
 
 get() { # url file
   [ -s "$2" ] && { echo "have $2"; return; }
@@ -14,7 +15,7 @@ get() { # url file
 }
 
 REL=https://github.com/k2-fsa/sherpa-onnx/releases/download
-get $REL/v2.0.1/sherpa-onnx-2.0.1.aar app/libs/sherpa-onnx-2.0.1.aar
+get $REL/v2.0.1/sherpa-onnx-2.0.1.aar "$APP/libs/sherpa-onnx-2.0.1.aar"
 get https://dl.google.com/dl/android/maven2/com/google/mediapipe/tasks-genai/0.10.35/tasks-genai-0.10.35.aar "$CACHE/tasks-genai-0.10.35.aar"
 
 # ASR: GigaAM v3 (Russian, CTC, with punctuation and casing), int8
@@ -41,4 +42,4 @@ get $REL/speaker-recongition-models/nemo_en_titanet_small.onnx "$ASSETS/diar/tit
 # Local LLM: Qwen2.5-0.5B-Instruct for MediaPipe LLM Inference (apache-2.0, ungated)
 get https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task "$ASSETS/llm/qwen2.5-0.5b-instruct-q8.task"
 
-ls -la app/libs "$ASSETS"/*
+ls -la "$APP/libs" "$ASSETS"/*

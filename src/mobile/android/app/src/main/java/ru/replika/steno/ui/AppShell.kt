@@ -184,7 +184,7 @@ private fun DrawerPanel(
 fun themeLabel(m: ThemeMode) = when (m) {
     ThemeMode.LIGHT -> "Светлая"
     ThemeMode.DARK -> "Тёмная"
-    ThemeMode.SYSTEM -> "Как в системе"
+    ThemeMode.SYSTEM -> "Авто"
 }
 
 fun themeIcon(m: ThemeMode): ImageVector = when (m) {

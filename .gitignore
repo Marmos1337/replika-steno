@@ -1,15 +1,19 @@
 .gradle/
 build/
-/app/build/
+src/mobile/android/app/build/
+src/mobile/android/build/
+src/mobile/android/.gradle/
+src/mobile/android/.kotlin/
+src/mobile/android/local.properties
 local.properties
 .idea/
 *.iml
 .DS_Store
 # models are fetched by tools/fetch_models.sh, too big for git
-/app/src/main/assets/models/
+src/mobile/android/app/src/main/assets/models/
 /models-cache/
 /dist/*.apk
 captures/
-/app/libs/*.aar
+src/mobile/android/app/libs/*.aar
 testdata/parts/
 .kotlin/

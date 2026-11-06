@@ -17,8 +17,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.ui.unit.dp
+import ru.replika.steno.ui.theme.Radius
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -185,6 +190,7 @@ fun PlayerBar(player: AudioPlayer, side: Dp, modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlayerControls(player: AudioPlayer) {
     val c = Theme.colors
@@ -193,6 +199,7 @@ private fun PlayerControls(player: AudioPlayer) {
     val dur = player.durationMs
     val frac = drag ?: if (dur > 0) (player.positionMs.toFloat() / dur).coerceIn(0f, 1f) else 0f
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center) {
+        // thin monochrome scrubber: 4dp track, 14dp round thumb, full 48dp touch height
         Slider(
             value = frac,
             onValueChange = { drag = it },
@@ -201,10 +208,14 @@ private fun PlayerControls(player: AudioPlayer) {
                 drag = null
             },
             enabled = ready && dur > 0,
-            colors = SliderDefaults.colors(
-                thumbColor = c.text, activeTrackColor = c.text, inactiveTrackColor = c.raised,
-                disabledThumbColor = c.muted, disabledActiveTrackColor = c.raised, disabledInactiveTrackColor = c.raised,
-            ),
+            thumb = {
+                Box(Modifier.size(14.dp).clip(CircleShape).background(if (ready) c.text else c.muted))
+            },
+            track = {
+                Box(Modifier.fillMaxWidth().height(4.dp).clip(Radius.pill).background(c.raised)) {
+                    Box(Modifier.fillMaxWidth(frac).fillMaxHeight().clip(Radius.pill).background(if (ready) c.text else c.muted))
+                }
+            },
             modifier = Modifier.fillMaxWidth().height(Size.touch),
         )
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

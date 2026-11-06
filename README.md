@@ -38,22 +38,22 @@ sh tools/fetch_models.sh
 ```
 
 ```bash
-./gradlew :app:assembleRelease
+cd src/mobile/android && ./gradlew :app:assembleRelease
 ```
 
-APK появится в `app/build/outputs/apk/release/`. Скрипт `fetch_models.sh` скачивает движок sherpa-onnx (AAR) и модели в `app/libs` и `app/src/main/assets/models`; в git они не хранятся из-за размера.
+APK появится в `src/mobile/android/app/build/outputs/apk/release/`. Скрипт `fetch_models.sh` скачивает движок sherpa-onnx (AAR) и модели в `src/mobile/android/app/libs` и `src/mobile/android/app/src/main/assets/models`; в git они не хранятся из-за размера.
 
 Юнит-тесты логики (схема экспорта, сегменты, кластеризация, защита от выдумок LLM, разбор итогов):
 
 ```bash
-./gradlew :app:testDebugUnitTest
+cd src/mobile/android && ./gradlew :app:testDebugUnitTest
 ```
 
 ## Документы
 
 - [Архитектура](docs/ARCHITECTURE.md)
 - [Модели](docs/MODELS.md)
-- [Тесты и замеры](docs/TESTS.md)
+- [Тесты и замеры](docs/TEST_RESULTS.md)
 - [Ограничения](docs/LIMITATIONS.md)
 
 ## Инструменты

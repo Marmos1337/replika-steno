@@ -115,7 +115,7 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
         const val PAD_MS = 400
         const val MAX_PHRASE_S = 12f
         private const val MIN_PHRASE_SAMPLES = 16_000 / 4
-        /** Cosine-distance cut-off. Tuned on the test set: results identical across 0.5-0.7, 0.6 is the middle (docs/TESTS.md). */
+        /** Cosine-distance cut-off. Tuned on the test set: results identical across 0.5-0.7, 0.6 is the middle (docs/TEST_RESULTS.md). */
         const val CLUSTER_THRESHOLD = 0.6f
     }
 }

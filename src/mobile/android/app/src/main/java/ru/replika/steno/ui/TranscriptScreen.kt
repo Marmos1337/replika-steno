@@ -422,6 +422,7 @@ private suspend fun LazyListState.ensureVisible(index: Int) {
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun Header(rec: Recording, speakers: List<String>, side: Dp, onRename: (String) -> Unit) {
     val c = Theme.colors
     Column(Modifier.fillMaxWidth().padding(bottom = Space.s)) {
@@ -447,11 +448,12 @@ private fun Header(rec: Recording, speakers: List<String>, side: Dp, onRename: (
             }
             Spacer(Modifier.height(Space.m))
         }
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = side),
+        // wraps to new lines instead of running off the screen when there are many participants
+        FlowRow(
+            Modifier.fillMaxWidth().padding(horizontal = side),
             horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
-            items(speakers, key = { it }) { s ->
+            speakers.forEach { s ->
                 SpeakerChip(rec.displayName(s), c.speakerTone(s), "Переименовать участника", onClick = { onRename(s) }, trailing = Ic.Edit)
             }
         }

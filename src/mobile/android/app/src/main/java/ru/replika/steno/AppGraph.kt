@@ -74,7 +74,9 @@ class AppGraph(private val context: Context) {
         var transcriptReady = false
         try {
             report(Progress(Stage.DECODE, 0f), "Подготовка моделей")
+            val tLoad = SystemClock.elapsedRealtime()
             val (rec, dia) = asrEngines { report(Progress(Stage.DECODE, 0f), it) }
+            Log.i(TAG, "models ready in ${SystemClock.elapsedRealtime() - tLoad} ms")
             val t0 = SystemClock.elapsedRealtime()
             val audio = AudioDecoder.decode(context, android.net.Uri.fromFile(audioFile)) { report(Progress(Stage.DECODE, it)) }
             val decodeMs = SystemClock.elapsedRealtime() - t0
@@ -99,7 +101,9 @@ class AppGraph(private val context: Context) {
 
             // phase 2: local LLM - punctuation/case (guarded) and the meeting summary
             report(Progress(Stage.FORMAT, 0f), "Загрузка языковой модели")
+            val tLlm = SystemClock.elapsedRealtime()
             val fmt = llmEngine()
+            Log.i(TAG, "llm ready in ${SystemClock.elapsedRealtime() - tLlm} ms")
             val llm = withContext(Dispatchers.Default) { Pipeline(dia, rec, fmt).polish(result.utterances) { report(it) } }
             store.update(id) { cur ->
                 // keep anything the user edited while the LLM was working
@@ -143,13 +147,17 @@ class AppGraph(private val context: Context) {
             return
         }
         val error = when (e) {
-            is CancellationException -> "Обработка отменена."
+            is CancellationException -> CANCELLED
             is NoSpeechException -> "В записи не найдено речи. Проверьте, что файл не пустой и голос слышно."
             is AudioDecodeException -> e.message ?: "Не удалось прочитать файл."
             is OutOfMemoryError -> "Не хватило памяти устройства для этой записи. Попробуйте файл короче."
             else -> "Не удалось обработать запись: ${e.message ?: e.javaClass.simpleName}"
         }
-        store.update(id) { it.copy(state = RecordingState.FAILED, error = error) }
+        store.update(id) {
+            // stopping a re-run keeps the transcript that was already there
+            if (e is CancellationException && it.utterances.isNotEmpty()) it.copy(state = RecordingState.READY, error = null, llmPending = false)
+            else it.copy(state = RecordingState.FAILED, error = error)
+        }
     }
 
     /**
@@ -192,5 +200,6 @@ class AppGraph(private val context: Context) {
     companion object {
         private const val TAG = "Replika"
         private const val IDLE_RELEASE_MS = 30_000L
+        const val CANCELLED = "Обработка отменена."
     }
 }

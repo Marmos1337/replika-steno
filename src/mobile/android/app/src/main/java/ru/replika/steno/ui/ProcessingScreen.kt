@@ -1,5 +1,7 @@
 package ru.replika.steno.ui
 
+import ru.replika.steno.AppGraph
+
 import android.os.SystemClock
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -204,16 +206,18 @@ private fun StageRow(stage: Stage, state: Int, fraction: Float, waitingForModels
 @Composable
 private fun FailedView(error: String, onRetry: () -> Unit, onBack: () -> Unit) {
     val c = Theme.colors
+    // a stop the user asked for is not an error: calm icon and wording
+    val stopped = error == AppGraph.CANCELLED
     AppCard(Modifier.fillMaxWidth()) {
-        RoundIcon(Ic.Alert, danger = true)
+        RoundIcon(if (stopped) Ic.Close else Ic.Alert, danger = !stopped)
         Spacer(Modifier.height(Space.l))
-        Text("Не получилось обработать", style = Type.heading, color = c.text)
+        Text(if (stopped) "Обработка остановлена" else "Не получилось обработать", style = Type.heading, color = c.text)
         Spacer(Modifier.height(Space.s))
-        Text(error, style = Type.body, color = c.muted)
+        Text(if (stopped) "Запись сохранена. Обработку можно запустить снова в любой момент." else error, style = Type.body, color = c.muted)
     }
     Spacer(Modifier.height(Space.xl))
     Column(verticalArrangement = Arrangement.spacedBy(Space.s)) {
-        PrimaryButton("Попробовать снова", onRetry, Modifier.fillMaxWidth(), Ic.Refresh)
+        PrimaryButton(if (stopped) "Обработать снова" else "Попробовать снова", onRetry, Modifier.fillMaxWidth(), Ic.Refresh)
         SecondaryButton("К записям", onBack, Modifier.fillMaxWidth())
     }
 }
