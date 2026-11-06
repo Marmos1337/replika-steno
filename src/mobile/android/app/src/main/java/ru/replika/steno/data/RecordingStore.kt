@@ -41,7 +41,10 @@ class RecordingStore(private val context: Context) {
         }.map {
             // a run interrupted by process death cannot resume half-way: mark it so the user can restart it
             when {
-                it.state == RecordingState.PROCESSING -> it.copy(state = RecordingState.FAILED, error = "Обработка была прервана. Запустите её снова.")
+                // a re-run that was killed keeps the transcript it already had
+                it.state == RecordingState.PROCESSING && it.utterances.isNotEmpty() ->
+                    it.copy(state = RecordingState.READY, error = null, llmPending = false, llmNote = "Повторная обработка была прервана, показан прежний результат.")
+                it.state == RecordingState.PROCESSING -> it.copy(state = RecordingState.FAILED, error = INTERRUPTED)
                 it.llmPending -> it.copy(llmPending = false, llmNote = "Итоги не достроены: приложение было закрыто. Запустите обработку снова.")
                 else -> it
             }
@@ -112,6 +115,7 @@ class RecordingStore(private val context: Context) {
     }.getOrNull() ?: uri.lastPathSegment
 
     companion object {
+        const val INTERRUPTED = "Обработка была прервана: приложение закрылось. Запустите её снова."
         private const val META = "recording.json"
         private const val AUDIO = "audio"
 

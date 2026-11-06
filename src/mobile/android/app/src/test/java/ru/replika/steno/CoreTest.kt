@@ -146,3 +146,19 @@ class ActionGuardTest {
         assertEquals(null, s.actions[2].due)                                                    // «завтра» never said
     }
 }
+
+class MissingRefsTest {
+    @Test fun linksByContentWhenModelForgetsNumbers() {
+        val utts = listOf(
+            ru.replika.steno.core.Utterance("speaker_1", 0, 1000, "Доступ выдам сегодня до вечера."),
+            ru.replika.steno.core.Utterance("speaker_2", 1000, 2000, "Описание напишет Марина, я передам скриншоты в среду."),
+        )
+        val s = ru.replika.steno.core.SummaryParser.parse(
+            "КРАТКО:\n- Описание напишет Марина, скриншоты передадут в среду.\n- Обсудили погоду на выходных.\nПОРУЧЕНИЯ:\n- Написать описание | Марина | -",
+            utts,
+        )
+        assertEquals(listOf(1), s.points.single().utteranceIndices)   // invented point about the weather is dropped
+        assertEquals(1, s.actions.single().utteranceIndex)
+        assertEquals("Марина", s.actions.single().assignee)
+    }
+}

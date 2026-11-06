@@ -53,12 +53,14 @@ object SummaryParser {
             if (header != null && line.length < 30 && !REF.containsMatchIn(line)) { section = header; continue }
             if (section == Section.NONE || line.isEmpty()) continue
             val body = line.trimStart('-', '*', '•', ' ', '\t').replace(Regex("^\\d+[.)]\\s*"), "")
-            val refs = REF.findAll(body).flatMap { m -> m.groupValues[1].split(',', ';').map { it.trim().toInt() } }
+            val cited = REF.findAll(body).flatMap { m -> m.groupValues[1].split(',', ';').map { it.trim().toInt() } }
                 .map { it - 1 }.filter { it in utts.indices }.distinct().toList()
             val text = REF.replace(body, "").trim().trimEnd(',', ';', '.').trim()
+            // the small model sometimes forgets the numbers: then link the lines that really contain its words
+            val refs = cited.ifEmpty { matchRefs(text.replace('|', ' '), utts) }
             if (refs.isEmpty() || text.length < 3) continue
-            val cited = refs.joinToString(" ") { utts[it].text }
-            if (!grounded(text.substringBefore('|'), cited)) continue
+            val citedText = refs.joinToString(" ") { utts[it].text }
+            if (!grounded(text.substringBefore('|'), citedText)) continue
             when (section) {
                 Section.SUMMARY -> points += SummaryPoint(text, refs, PointKind.SUMMARY)
                 Section.DECISION -> points += SummaryPoint(text, refs, PointKind.DECISION)
@@ -67,7 +69,7 @@ object SummaryParser {
                     val parts = text.split('|').map { it.trim() }
                     val what = parts[0]
                     if (what.length < 3) continue
-                    val said = cited
+                    val said = citedText
                     actions += ActionItem(
                         text = what,
                         speakerId = utts[refs.first()].speakerId,
@@ -91,6 +93,22 @@ object SummaryParser {
         if (content.isEmpty()) return false
         val saidStems = TextGuard.words(cited).filter { it.length >= 5 }.map { it.take(5) }.toSet()
         return content.any { it.take(5) in saidStems }
+    }
+
+    /**
+     * Utterances that share at least two content words (5-letter stems) with [text], best first, at
+     * most two. Used only when the model gave no reference numbers.
+     */
+    fun matchRefs(text: String, utts: List<Utterance>): List<Int> {
+        val stems = TextGuard.words(text).filter { it.length >= 5 }.map { it.take(5) }.toSet()
+        if (stems.size < 2) return emptyList()
+        return utts.indices
+            .map { i -> i to TextGuard.words(utts[i].text).filter { it.length >= 5 }.map { it.take(5) }.toSet().count { it in stems } }
+            .filter { it.second >= 2 }
+            .sortedByDescending { it.second }
+            .take(2)
+            .map { it.first }
+            .sorted()
     }
 
     /** Keeps [value] only if every word of it (by a 4-letter stem) occurs in [said]. */

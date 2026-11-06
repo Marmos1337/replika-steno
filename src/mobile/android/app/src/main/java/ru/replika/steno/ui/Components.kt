@@ -582,7 +582,7 @@ fun plural(n: Int, one: String, few: String, many: String): String {
         m10 in 2..4 && m100 !in 12..14 -> few
         else -> many
     }
-    return "$n $w"
+    return "$n\u00A0$w" // never break between the number and its word
 }
 
 fun fmtDuration(ms: Long): String {
