@@ -1,0 +1,12 @@
+.gradle/
+build/
+/app/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+# models are fetched by tools/fetch_models.sh, too big for git
+/app/src/main/assets/models/
+/models-cache/
+/dist/*.apk
+captures/
