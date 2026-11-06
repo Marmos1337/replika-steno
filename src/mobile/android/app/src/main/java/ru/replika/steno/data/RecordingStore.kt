@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -49,7 +51,8 @@ class RecordingStore(private val context: Context) {
                 else -> it
             }
         }
-        _items.value = list.sortedByDescending { it.createdAtMs }
+        // keep anything imported or changed while the disk was being read
+        _items.update { cur -> (list.associateBy { it.id } + cur.associateBy { it.id }).values.sortedByDescending { it.createdAtMs } }
         _loaded.value = true
     }
 
@@ -88,7 +91,12 @@ class RecordingStore(private val context: Context) {
         rec
     }
 
-    suspend fun save(rec: Recording) = withContext(Dispatchers.IO) {
+    /** Serialises every read-modify-write, so a UI edit and the pipeline never overwrite each other. */
+    private val lock = Mutex()
+
+    suspend fun save(rec: Recording) = lock.withLock { write(rec) }
+
+    private suspend fun write(rec: Recording) = withContext(Dispatchers.IO) {
         val dir = File(root, rec.id).apply { mkdirs() }
         val tmp = File(dir, "$META.tmp")
         tmp.writeText(toJson(rec).toString())
@@ -96,16 +104,18 @@ class RecordingStore(private val context: Context) {
         _items.update { list -> (list.filterNot { it.id == rec.id } + rec).sortedByDescending { it.createdAtMs } }
     }
 
-    suspend fun update(id: String, block: (Recording) -> Recording) {
-        val cur = get(id) ?: return
+    suspend fun update(id: String, block: (Recording) -> Recording) = lock.withLock {
+        val cur = get(id) ?: return@withLock
         val next = block(cur)
         if (next.state != cur.state) android.util.Log.i("Replika", "state ${id.take(8)}: ${cur.state} -> ${next.state}")
-        save(next)
+        write(next)
     }
 
-    suspend fun delete(id: String) = withContext(Dispatchers.IO) {
-        File(root, id).deleteRecursively()
-        _items.update { list -> list.filterNot { it.id == id } }
+    suspend fun delete(id: String) = lock.withLock {
+        withContext(Dispatchers.IO) {
+            File(root, id).deleteRecursively()
+            _items.update { list -> list.filterNot { it.id == id } }
+        }
     }
 
     private fun displayName(uri: Uri): String? = runCatching {

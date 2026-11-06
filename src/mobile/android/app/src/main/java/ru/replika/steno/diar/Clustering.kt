@@ -28,7 +28,8 @@ object Clustering {
         return s
     }
 
-    fun cluster(vectors: List<FloatArray>, threshold: Float): Result {
+    /** [checkCancel] is called once per merge step so a long meeting can be stopped mid-way. */
+    fun cluster(vectors: List<FloatArray>, threshold: Float, checkCancel: () -> Unit = {}): Result {
         val n = vectors.size
         if (n == 0) return Result(IntArray(0), FloatArray(0))
         val e = vectors.map { normalize(it) }
@@ -38,6 +39,7 @@ object Clustering {
         val alive = BooleanArray(n) { true }
         val owner = IntArray(n) { it } // representative cluster of each point
         while (true) {
+            checkCancel()
             var best = Float.MAX_VALUE
             var bi = -1
             var bj = -1

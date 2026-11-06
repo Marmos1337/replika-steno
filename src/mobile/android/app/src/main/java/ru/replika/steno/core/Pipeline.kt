@@ -90,22 +90,29 @@ class Pipeline(
         onProgress(Progress(Stage.FORMAT, 0f))
         val f = formatter ?: return utts.map { it.copy(text = TextGuard.tidy(it.rawText)) }
         val out = ArrayList<Utterance>(utts.size)
-        val batch = 6
         var i = 0
         while (i < utts.size) {
             coroutineContext.ensureActive()
-            val chunk = utts.subList(i, minOf(i + batch, utts.size))
-            val answers = runCatching { f.formatLines(chunk.map { it.rawText }) }.getOrNull()
+            // up to 6 lines and ~600 characters, so prompt + answer fit the model's 1280-token window
+            var end = i + 1
+            var chars = utts[i].rawText.length
+            while (end < utts.size && end - i < 6 && chars + utts[end].rawText.length <= 600) { chars += utts[end].rawText.length; end++ }
+            val chunk = utts.subList(i, end)
+            val answers = if (chars > 900) null else llmCall { f.formatLines(chunk.map { it.rawText }) }
             chunk.forEachIndexed { k, u ->
                 val candidate = answers?.getOrNull(k)
                 val accepted = TextGuard.accept(u.rawText, candidate)
                 out += u.copy(text = TextGuard.tidy(accepted))
             }
-            i += batch
+            i = end
             onProgress(Progress(Stage.FORMAT, i.toFloat() / utts.size))
         }
         return out
     }
+
+    /** A failed LLM call costs only its own lines; cancellation is never swallowed. */
+    private suspend fun <T> llmCall(block: suspend () -> T): T? =
+        try { block() } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (e: Exception) { null }
 
     private suspend fun summarize(utts: List<Utterance>, onProgress: (Progress) -> Unit): MeetingSummary? {
         val f = formatter ?: return null
@@ -115,7 +122,7 @@ class Pipeline(
         val actions = ArrayList<ActionItem>()
         windows.forEachIndexed { i, w ->
             coroutineContext.ensureActive()
-            val answer = runCatching { f.summarize(w) }.getOrNull()
+            val answer = llmCall { f.summarize(w) }
             if (answer != null) {
                 val part = SummaryParser.parse(answer, utts)
                 part.points.filterTo(points) { p -> points.none { it.text.equals(p.text, ignoreCase = true) } }

@@ -162,3 +162,15 @@ class MissingRefsTest {
         assertEquals("Марина", s.actions.single().assignee)
     }
 }
+
+class ResamplerTest {
+    @Test fun downsamplesToTargetLengthAndKeepsSignal() {
+        val sr = 48_000
+        val input = FloatArray(sr) { kotlin.math.sin(2 * Math.PI * 440 * it / sr).toFloat() * 0.5f }
+        val out = ru.replika.steno.core.AudioDecoder.resample(input, sr, 16_000)
+        assertTrue(kotlin.math.abs(out.size - 16_000) <= 2)
+        val rms = kotlin.math.sqrt(out.drop(100).map { it * it }.average())
+        assertTrue("rms $rms", rms in 0.30..0.37)   // a 440 Hz tone passes the anti-alias filter almost unchanged
+        assertTrue(ru.replika.steno.core.AudioDecoder.resample(input, sr, sr) === input)
+    }
+}

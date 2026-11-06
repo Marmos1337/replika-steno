@@ -69,10 +69,10 @@ class AppGraph(private val context: Context) {
 
     private suspend fun process(id: String) {
         val audioFile = store.audioFile(id)
-        store.update(id) { it.copy(state = RecordingState.PROCESSING, error = null, llmPending = false, llmNote = null) }
         fun report(p: Progress, note: String? = null) = _job.update { ActiveJob(id, p, note) }
         var transcriptReady = false
         try {
+            store.update(id) { it.copy(state = RecordingState.PROCESSING, error = null, llmPending = false, llmNote = null) }
             report(Progress(Stage.DECODE, 0f), "Подготовка моделей")
             val tLoad = SystemClock.elapsedRealtime()
             val (rec, dia) = asrEngines { report(Progress(Stage.DECODE, 0f), it) }
@@ -127,7 +127,9 @@ class AppGraph(private val context: Context) {
             Log.i(TAG, "llm $id: ${llm.llmMs} ms")
         } catch (e: Throwable) {
             // the coroutine may already be cancelled, so the final save must not be cancellable itself
-            withContext(NonCancellable) { fail(id, e, transcriptReady) }
+            withContext(NonCancellable) {
+                runCatching { fail(id, e, transcriptReady) }.onFailure { Log.e(TAG, "could not save the failure", it) }
+            }
         } finally {
             _job.value = null
             releaseWhenIdle()
@@ -191,6 +193,7 @@ class AppGraph(private val context: Context) {
             if (!settings.llmEnabled.first()) {
                 llmStatus = "выключена в настройках"; null
             } else llm ?: runCatching { LlmFormatter.create(context) }
+                .onFailure { if (it is CancellationException) throw it }
                 .onSuccess { llmStatus = "работает"; llm = it }
                 .onFailure { llmStatus = "не загрузилась: ${it.message ?: it.javaClass.simpleName}"; Log.e(TAG, "llm", it) }
                 .getOrNull()

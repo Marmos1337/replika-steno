@@ -11,7 +11,10 @@ import kotlinx.coroutines.ensureActive
 
 class AudioDecodeException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-/** Mono float PCM at [SAMPLE_RATE], ready for the models. */
+/**
+ * Mono float PCM at [SAMPLE_RATE], ready for the models. [samples] may end with a short tail of
+ * zeros (the buffer is sized from the declared duration), which is silence for every model.
+ */
 class DecodedAudio(val samples: FloatArray, private val containerDurationMs: Long = 0) {
     /**
      * Length used for all time bounds. Decoders may emit a few extra samples (AAC priming/padding),
@@ -25,12 +28,15 @@ class DecodedAudio(val samples: FloatArray, private val containerDurationMs: Lon
 
     companion object {
         const val SAMPLE_RATE = 16_000
+        /** Longer files would not fit the app's heap as 16 kHz floats (2.5 h = 576 MB). */
+        const val MAX_DURATION_MS = 150L * 60 * 1000
     }
 }
 
 /**
  * Decodes any format the platform can read (mp3, m4a/aac, ogg/opus, flac, wav, amr, 3gp...)
  * into 16 kHz mono float samples. Uses only MediaExtractor + MediaCodec, so nothing leaves the device.
+ * Downmixing and resampling happen while decoding, so only the 16 kHz signal is ever held in memory.
  */
 object AudioDecoder {
 
@@ -49,69 +55,84 @@ object AudioDecoder {
             val format = extractor.getTrackFormat(track)
             val mime = format.getString(MediaFormat.KEY_MIME)!!
             val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L
-
-            val codec = try {
-                MediaCodec.createDecoderByType(mime).apply { configure(format, null, null, 0) }
-            } catch (e: Exception) {
-                throw AudioDecodeException("Формат «$mime» не поддерживается этим устройством.", e)
+            if (durationUs / 1000 > DecodedAudio.MAX_DURATION_MS) {
+                throw AudioDecodeException("Запись длиннее 2,5 часа. Разделите её на части и обработайте по очереди.")
             }
 
             var srcRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
             var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             var pcmFloat = false
-            val mono = FloatArrayBuilder(if (durationUs > 0) (durationUs / 1_000_000L * srcRate).toInt() + srcRate else 1 shl 20)
+            val out = FloatArrayBuilder(
+                if (durationUs > 0) (durationUs * DecodedAudio.SAMPLE_RATE / 1_000_000L).toInt() + DecodedAudio.SAMPLE_RATE else 1 shl 20,
+            )
+            var resampler = StreamResampler(srcRate, DecodedAudio.SAMPLE_RATE, out)
 
-            codec.start()
+            var codec: MediaCodec? = null
             try {
+                // assigned before configure/start so the finally below releases it if they throw
+                val c = try { MediaCodec.createDecoderByType(mime) } catch (e: Exception) {
+                    throw AudioDecodeException("Формат «$mime» не поддерживается этим устройством.", e)
+                }
+                codec = c
+                try {
+                    c.configure(format, null, null, 0)
+                    c.start()
+                } catch (e: Exception) {
+                    throw AudioDecodeException("Формат «$mime» не поддерживается этим устройством.", e)
+                }
                 val info = MediaCodec.BufferInfo()
                 var inputDone = false
                 var outputDone = false
                 while (!outputDone) {
                     coroutineContext.ensureActive()
                     if (!inputDone) {
-                        val inIdx = codec.dequeueInputBuffer(1_000)
+                        val inIdx = c.dequeueInputBuffer(1_000)
                         if (inIdx >= 0) {
-                            val buf = codec.getInputBuffer(inIdx)!!
+                            val buf = c.getInputBuffer(inIdx)!!
                             val size = extractor.readSampleData(buf, 0)
                             if (size < 0) {
-                                codec.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                c.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 inputDone = true
                             } else {
-                                codec.queueInputBuffer(inIdx, 0, size, extractor.sampleTime, 0)
+                                c.queueInputBuffer(inIdx, 0, size, extractor.sampleTime, 0)
                                 if (durationUs > 0) onProgress((extractor.sampleTime.toFloat() / durationUs).coerceIn(0f, 1f))
                                 extractor.advance()
                             }
                         }
                     }
-                    val outIdx = codec.dequeueOutputBuffer(info, 1_000)
+                    val outIdx = c.dequeueOutputBuffer(info, 1_000)
                     when {
                         outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                            val of = codec.outputFormat
-                            srcRate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                            val of = c.outputFormat
+                            val rate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
                             channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                             pcmFloat = of.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
                                 of.getInteger(MediaFormat.KEY_PCM_ENCODING) == android.media.AudioFormat.ENCODING_PCM_FLOAT
+                            if (rate != srcRate) {
+                                srcRate = rate
+                                resampler = StreamResampler(srcRate, DecodedAudio.SAMPLE_RATE, out)
+                            }
                         }
                         outIdx >= 0 -> {
-                            val out = codec.getOutputBuffer(outIdx)!!.order(ByteOrder.LITTLE_ENDIAN)
-                            out.position(info.offset)
-                            out.limit(info.offset + info.size)
+                            val buf = c.getOutputBuffer(outIdx)!!.order(ByteOrder.LITTLE_ENDIAN)
+                            buf.position(info.offset)
+                            buf.limit(info.offset + info.size)
                             if (pcmFloat) {
-                                val fb = out.asFloatBuffer()
+                                val fb = buf.asFloatBuffer()
                                 while (fb.remaining() >= channels) {
                                     var s = 0f
                                     repeat(channels) { s += fb.get() }
-                                    mono.add(s / channels)
+                                    resampler.push(s / channels)
                                 }
                             } else {
-                                val sb = out.asShortBuffer()
+                                val sb = buf.asShortBuffer()
                                 while (sb.remaining() >= channels) {
                                     var s = 0f
                                     repeat(channels) { s += sb.get() / 32768f }
-                                    mono.add(s / channels)
+                                    resampler.push(s / channels)
                                 }
                             }
-                            codec.releaseOutputBuffer(outIdx, false)
+                            c.releaseOutputBuffer(outIdx, false)
                             if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
                         }
                     }
@@ -121,58 +142,72 @@ object AudioDecoder {
             } catch (e: IllegalStateException) {
                 throw AudioDecodeException("Файл повреждён: декодер не смог его прочитать.", e)
             } finally {
-                runCatching { codec.stop() }
-                codec.release()
+                codec?.let { runCatching { it.stop() }; it.release() }
             }
 
-            val raw = mono.toArray()
-            if (raw.isEmpty()) throw AudioDecodeException("Файл не содержит звука.")
+            if (out.size == 0) throw AudioDecodeException("Файл не содержит звука.")
             onProgress(1f)
-            return DecodedAudio(resample(raw, srcRate, DecodedAudio.SAMPLE_RATE), durationUs / 1000)
+            return DecodedAudio(out.result(), durationUs / 1000)
         } finally {
             extractor.release()
         }
     }
 
-    /** Windowed-sinc-free but alias-safe resampler: box low-pass when downsampling, then linear interpolation. */
+    /** Whole-array resampling with the same filter as the streaming path (used by tests and tools). */
     fun resample(input: FloatArray, from: Int, to: Int): FloatArray {
         if (from == to) return input
-        var src = input
-        if (from > to) {
-            // simple moving-average low-pass sized to the decimation ratio to limit aliasing
-            val win = (from / to).coerceAtLeast(1)
-            if (win > 1) {
-                val out = FloatArray(src.size)
-                var acc = 0f
-                for (i in src.indices) {
-                    acc += src[i]
-                    if (i >= win) acc -= src[i - win]
-                    out[i] = acc / minOf(i + 1, win)
-                }
-                src = out
-            }
+        val out = FloatArrayBuilder(input.size.toLong().times(to).div(from).toInt() + 2)
+        val r = StreamResampler(from, to, out)
+        for (x in input) r.push(x)
+        return out.result(exact = true)
+    }
+}
+
+/**
+ * Streaming resampler: moving-average low-pass sized to the decimation ratio (limits aliasing when
+ * going down from 44.1/48 kHz), then linear interpolation at the output rate.
+ */
+private class StreamResampler(from: Int, to: Int, private val out: FloatArrayBuilder) {
+    private val ratio = from.toDouble() / to
+    private val win = if (from > to) (from / to).coerceAtLeast(1) else 1
+    private val ring = FloatArray(win)
+    private var acc = 0.0
+    private var count = 0L        // input samples seen
+    private var prev = 0f
+    private var nextPos = 0.0     // source position of the next output sample
+
+    fun push(x: Float) {
+        val slot = (count % win).toInt()
+        acc += x - ring[slot]
+        ring[slot] = x
+        val y = (acc / minOf(count + 1, win.toLong())).toFloat()
+        val g = count.toDouble()
+        if (count == 0L) prev = y
+        while (nextPos <= g) {
+            val frac = (nextPos - (g - 1)).toFloat().coerceIn(0f, 1f)
+            out.add(prev + (y - prev) * frac)
+            nextPos += ratio
         }
-        val outLen = (src.size.toLong() * to / from).toInt()
-        val out = FloatArray(outLen)
-        val ratio = from.toDouble() / to
-        for (i in 0 until outLen) {
-            val pos = i * ratio
-            val i0 = pos.toInt()
-            val frac = (pos - i0).toFloat()
-            val a = src[i0.coerceAtMost(src.size - 1)]
-            val b = src[(i0 + 1).coerceAtMost(src.size - 1)]
-            out[i] = a + (b - a) * frac
-        }
-        return out
+        prev = y
+        count++
     }
 }
 
 private class FloatArrayBuilder(initial: Int) {
     private var data = FloatArray(initial.coerceAtLeast(1024))
-    private var size = 0
+    var size = 0
+        private set
+
     fun add(v: Float) {
-        if (size == data.size) data = data.copyOf(data.size * 2)
+        if (size == data.size) data = data.copyOf(data.size + data.size / 2)
         data[size++] = v
     }
-    fun toArray(): FloatArray = data.copyOf(size)
+
+    /**
+     * The buffer was sized from the declared duration, so it is normally only slightly longer than
+     * the signal: the zero tail is returned as is to avoid a second copy of a long recording.
+     * Copies only when asked or when the estimate was far off (more than 10 s of slack).
+     */
+    fun result(exact: Boolean = false): FloatArray =
+        if (exact || data.size - size > 10 * DecodedAudio.SAMPLE_RATE) data.copyOf(size) else data
 }

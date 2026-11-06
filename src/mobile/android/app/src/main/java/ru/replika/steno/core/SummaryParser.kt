@@ -23,12 +23,13 @@ object SummaryParser {
             val line = "[${i + 1}] ${u.speakerId}: ${u.text.take(maxChars / 2)}\n"
             if (sb.length + line.length > maxChars && sb.isNotEmpty()) {
                 out += sb.toString(); sb.clear()
-                if (out.size == maxWindows) return out
             }
             sb.append(line)
         }
         if (sb.isNotEmpty()) out += sb.toString()
-        return out
+        if (out.size <= maxWindows) return out
+        // long meeting: take windows spread evenly from start to end, not just the first minutes
+        return List(maxWindows) { k -> out[(k.toLong() * (out.size - 1) / (maxWindows - 1)).toInt()] }
     }
 
     private val REF = Regex("\\[(\\d+(?:\\s*[,;]\\s*\\d+)*)\\]")
@@ -53,7 +54,7 @@ object SummaryParser {
             if (header != null && line.length < 30 && !REF.containsMatchIn(line)) { section = header; continue }
             if (section == Section.NONE || line.isEmpty()) continue
             val body = line.trimStart('-', '*', '•', ' ', '\t').replace(Regex("^\\d+[.)]\\s*"), "")
-            val cited = REF.findAll(body).flatMap { m -> m.groupValues[1].split(',', ';').map { it.trim().toInt() } }
+            val cited = REF.findAll(body).flatMap { m -> m.groupValues[1].split(',', ';').mapNotNull { it.trim().toIntOrNull() } }
                 .map { it - 1 }.filter { it in utts.indices }.distinct().toList()
             val text = REF.replace(body, "").trim().trimEnd(',', ';', '.').trim()
             // the small model sometimes forgets the numbers: then link the lines that really contain its words

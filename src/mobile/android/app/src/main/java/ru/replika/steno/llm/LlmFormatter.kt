@@ -47,7 +47,7 @@ class LlmFormatter private constructor(private val llm: LlmInference) : Formatte
                 },
             )
             val answer = session.generateResponse()
-            android.util.Log.i("Replika", "llm ${android.os.SystemClock.elapsedRealtime() - t0} ms, prompt ${user.length} chars, answer: ${answer.take(700).replace('\n', '⏎')}")
+            android.util.Log.i("Replika", "llm ${android.os.SystemClock.elapsedRealtime() - t0} ms, prompt ${user.length} chars, answer ${answer.length} chars")
             return answer
         } finally {
             session.close()

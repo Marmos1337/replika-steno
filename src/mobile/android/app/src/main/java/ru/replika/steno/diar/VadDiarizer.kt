@@ -40,7 +40,8 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
     )
 
     override suspend fun diarize(samples: FloatArray, sampleRate: Int, onProgress: (Float) -> Unit): List<SpeakerTurn> {
-        val phrases = synchronized(this) { detectSpeech(samples) }
+        val ctx = coroutineContext
+        val phrases = synchronized(this) { detectSpeech(samples) { ctx.ensureActive() } }
         onProgress(0.15f)
         if (phrases.isEmpty()) return emptyList()
 
@@ -58,7 +59,7 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
             onProgress(0.15f + 0.75f * (i + 1) / phrases.size)
         }
         coroutineContext.ensureActive()
-        val result = Clustering.cluster(embeddings, CLUSTER_THRESHOLD)
+        val result = Clustering.cluster(embeddings, CLUSTER_THRESHOLD) { ctx.ensureActive() }
         onProgress(1f)
         return phrases.mapIndexed { i, (a, b) ->
             SpeakerTurn(a * 1000L / sampleRate, b * 1000L / sampleRate, result.labels[i], result.confidence[i])
@@ -66,7 +67,7 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
     }
 
     /** Returns [start, end) sample ranges of speech. */
-    private fun detectSpeech(samples: FloatArray): List<Pair<Int, Int>> {
+    private fun detectSpeech(samples: FloatArray, checkCancel: () -> Unit): List<Pair<Int, Int>> {
         vad.reset()
         val out = ArrayList<Pair<Int, Int>>()
         fun drain() {
@@ -77,7 +78,9 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
             }
         }
         var i = 0
+        var n = 0
         while (i < samples.size) {
+            if (++n % 1000 == 0) checkCancel()
             val end = minOf(i + WINDOW, samples.size)
             vad.acceptWaveform(samples.copyOfRange(i, end))
             drain()
