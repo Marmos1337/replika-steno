@@ -1,0 +1,10 @@
+test_id,timestamp_utc,commit,file_name,file_size_bytes,duration_seconds,device,model_load_ms,transcript_ms,rtf,llm_load_ms,llm_phase_ms,wer,speaker_time_accuracy,speakers_ref,speakers_hyp,schema_ok,success,notes
+ru-cold,2026-11-06T20:56:00Z,dfd13cc,ru_dialog_2voices.m4a,398596,47.703,emulator API36 arm64 4vCPU 3GB,17101,13359,0.28,33240,53714,0.0118,0.9988,2,2,true,true,clean install; LLM copied from APK on first use
+ru-warm,2026-11-06T21:01:00Z,dfd13cc,ru_dialog_2voices.m4a,398596,47.703,emulator API36 arm64 4vCPU 3GB,2895,7341,0.15,1337,45436,0.0118,0.9988,2,2,true,true,models already in memory
+en,2026-11-06T21:28:00Z,dfd13cc,en_dialog_2voices.mp3,44180,14.546,emulator API36 arm64 4vCPU 3GB,7178,5065,0.35,821,13347,0.0,0.9929,2,2,true,true,includes first load of the English model
+long,2026-11-06T21:18:00Z,dfd13cc,long_mixed_6min.m4a,2964756,373.501,emulator API36 arm64 4vCPU 3GB,17275,69619,0.19,2565,196818,0.0297,0.9863,4,4,true,true,RU+EN 4 voices; peak PSS 1531-1583 MB
+no-speech,2026-11-06T19:55:00Z,6af9d4f,no_speech_noise.wav,640078,20.0,emulator API36 arm64 4vCPU 3GB,,,,,,,,,,,true,"expected failure: «В записи не найдено речи», no crash"
+corrupt-random,2026-11-06T19:54:00Z,6af9d4f,corrupted_random.mp3,300000,,emulator API36 arm64 4vCPU 3GB,,,,,,,,,,,true,"expected failure: «Не удалось открыть файл», no crash"
+corrupt-truncated,2026-11-06T19:55:00Z,6af9d4f,corrupted_truncated.m4a,20000,,emulator API36 arm64 4vCPU 3GB,,,,,,,,,,,true,"expected failure: «В файле нет звуковой дорожки», no crash"
+cancel,2026-11-06T20:36:00Z,6d0a491,long_mixed_6min.m4a,2964756,373.501,emulator API36 arm64 4vCPU 3GB,,,,,,,,,,,true,"«Отменить» → «Обработка отменена», no crash"
+kill,2026-11-06T21:30:00Z,dfd13cc,ru_dialog_2voices.m4a,398596,47.703,emulator API36 arm64 4vCPU 3GB,,,,,,,,,,,true,"am force-stop during re-run → previous transcript kept"
