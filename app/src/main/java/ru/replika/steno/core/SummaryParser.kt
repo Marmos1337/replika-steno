@@ -12,17 +12,23 @@ package ru.replika.steno.core
  */
 object SummaryParser {
 
-    /** Keeps the prompt inside a small model's context: the head of a long meeting is used and that is reported. */
-    const val MAX_CHARS = 7_000
-
-    fun numbered(utts: List<Utterance>): String {
+    /**
+     * The bundled model has a 1280-token window, so a meeting is summarised in windows of numbered
+     * lines. Numbering is global, so references stay valid for the whole transcript.
+     */
+    fun windows(utts: List<Utterance>, maxChars: Int = 1_600, maxWindows: Int = 8): List<String> {
+        val out = ArrayList<String>()
         val sb = StringBuilder()
         for ((i, u) in utts.withIndex()) {
-            val line = "[${i + 1}] ${u.speakerId}: ${u.text}\n"
-            if (sb.length + line.length > MAX_CHARS) break
+            val line = "[${i + 1}] ${u.speakerId}: ${u.text.take(maxChars / 2)}\n"
+            if (sb.length + line.length > maxChars && sb.isNotEmpty()) {
+                out += sb.toString(); sb.clear()
+                if (out.size == maxWindows) return out
+            }
             sb.append(line)
         }
-        return sb.toString()
+        if (sb.isNotEmpty()) out += sb.toString()
+        return out
     }
 
     private val REF = Regex("\\[(\\d+(?:\\s*[,;]\\s*\\d+)*)\\]")

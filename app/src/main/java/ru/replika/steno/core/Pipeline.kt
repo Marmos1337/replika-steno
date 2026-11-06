@@ -66,7 +66,7 @@ class Pipeline(
             val r = recognizer.recognize(Segments.slice(audio.samples, sr, p.startMs, p.endMs), sr)
             val text = r.text.trim()
             if (text.isNotEmpty()) {
-                utterances += Utterance(ids.getValue(p.cluster), p.startMs, p.endMs, text, text, r.confidence)
+                utterances += Utterance(ids.getValue(p.cluster), p.startMs, p.endMs, text, text, p.confidence)
             }
             onProgress(Progress(Stage.RECOGNIZE, (i + 1f) / pieces.size))
         }
@@ -112,9 +112,19 @@ class Pipeline(
     private suspend fun summarize(utts: List<Utterance>, onProgress: (Progress) -> Unit): MeetingSummary? {
         val f = formatter ?: return null
         onProgress(Progress(Stage.SUMMARY, 0f))
-        val numbered = SummaryParser.numbered(utts)
-        val answer = runCatching { f.summarize(numbered) }.getOrNull() ?: return null
-        onProgress(Progress(Stage.SUMMARY, 1f))
-        return SummaryParser.parse(answer, utts).takeIf { it.points.isNotEmpty() || it.actions.isNotEmpty() }
+        val windows = SummaryParser.windows(utts)
+        val points = ArrayList<SummaryPoint>()
+        val actions = ArrayList<ActionItem>()
+        windows.forEachIndexed { i, w ->
+            coroutineContext.ensureActive()
+            val answer = runCatching { f.summarize(w) }.getOrNull()
+            if (answer != null) {
+                val part = SummaryParser.parse(answer, utts)
+                part.points.filterTo(points) { p -> points.none { it.text.equals(p.text, ignoreCase = true) } }
+                part.actions.filterTo(actions) { a -> actions.none { it.text.equals(a.text, ignoreCase = true) } }
+            }
+            onProgress(Progress(Stage.SUMMARY, (i + 1f) / windows.size))
+        }
+        return MeetingSummary(points, actions).takeIf { points.isNotEmpty() || actions.isNotEmpty() }
     }
 }

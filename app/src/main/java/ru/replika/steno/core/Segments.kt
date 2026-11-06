@@ -1,7 +1,7 @@
 package ru.replika.steno.core
 
 /** A speech region from the diarizer, in samples-independent milliseconds. [cluster] is the raw cluster index. */
-data class SpeakerTurn(val startMs: Long, val endMs: Long, val cluster: Int)
+data class SpeakerTurn(val startMs: Long, val endMs: Long, val cluster: Int, val confidence: Float? = null)
 
 object Segments {
 
@@ -20,7 +20,7 @@ object Segments {
         for (t in sorted) {
             val last = out.lastOrNull()
             if (last != null && last.cluster == t.cluster && t.startMs - last.endMs < joinGapMs) {
-                out[out.size - 1] = last.copy(endMs = maxOf(last.endMs, t.endMs))
+                out[out.size - 1] = last.copy(endMs = maxOf(last.endMs, t.endMs), confidence = minConf(last.confidence, t.confidence))
                 continue
             }
             if (last != null && t.startMs < last.endMs) {
@@ -33,6 +33,8 @@ object Segments {
         }
         return out
     }
+
+    private fun minConf(a: Float?, b: Float?): Float? = if (a == null) b else if (b == null) a else minOf(a, b)
 
     /** Maps raw cluster ids to speaker_1, speaker_2... in order of first appearance. */
     fun speakerIds(turns: List<SpeakerTurn>): Map<Int, String> {

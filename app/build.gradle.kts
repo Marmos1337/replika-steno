@@ -34,11 +34,8 @@ android {
     buildFeatures { compose = true }
 
     // Model files are read straight from the APK, so keep them uncompressed.
-    androidResources { noCompress += listOf("onnx", "txt", "bin", "json", "data") }
+    androidResources { noCompress += listOf("onnx", "txt", "task") }
 
-    packaging {
-        jniLibs { useLegacyPackaging = true }
-    }
 }
 
 kotlin {
@@ -48,6 +45,7 @@ kotlin {
 dependencies {
     // Prebuilt on-device inference engines (no NDK build needed), dropped into app/libs.
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+    implementation("com.google.mediapipe:tasks-genai:0.10.35")
 
     val composeBom = platform("androidx.compose:compose-bom:2025.06.00")
     implementation(composeBom)

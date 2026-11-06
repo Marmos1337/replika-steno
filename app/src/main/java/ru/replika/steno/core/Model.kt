@@ -12,8 +12,11 @@ data class Utterance(
     val text: String,
     /** Text as the recognizer produced it, before the LLM formatting pass. */
     val rawText: String = text,
-    /** Recognizer confidence in [0,1], or null when the model gives no real score. */
-    val confidence: Float? = null,
+    /**
+     * How sure the diarizer is that this turn belongs to [speakerId]: the model's own score in [-1,1]
+     * (similarity to the speaker's cluster). Null when the model did not report one. Never invented.
+     */
+    val speakerConfidence: Float? = null,
 )
 
 data class Recording(

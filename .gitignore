@@ -10,3 +10,4 @@ local.properties
 /models-cache/
 /dist/*.apk
 captures/
+/app/libs/*.aar

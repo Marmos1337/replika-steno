@@ -114,7 +114,7 @@ class RecordingStore(private val context: Context) {
                     put(JSONObject().apply {
                         put("speakerId", u.speakerId); put("startMs", u.startMs); put("endMs", u.endMs)
                         put("text", u.text); put("rawText", u.rawText)
-                        u.confidence?.let { put("confidence", it.toDouble()) }
+                        u.speakerConfidence?.let { put("speakerConfidence", it.toDouble()) }
                     })
                 }
             })
@@ -149,7 +149,7 @@ class RecordingStore(private val context: Context) {
                         endMs = u.getLong("endMs"),
                         text = u.getString("text"),
                         rawText = u.optString("rawText", u.getString("text")),
-                        confidence = if (u.has("confidence")) u.getDouble("confidence").toFloat() else null,
+                        speakerConfidence = if (u.has("speakerConfidence")) u.getDouble("speakerConfidence").toFloat() else null,
                     )
                 }
             } ?: emptyList()

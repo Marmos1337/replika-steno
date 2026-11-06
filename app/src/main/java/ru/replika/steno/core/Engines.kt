@@ -6,11 +6,7 @@ interface Diarizer {
     suspend fun diarize(samples: FloatArray, sampleRate: Int, onProgress: (Float) -> Unit): List<SpeakerTurn>
 }
 
-data class AsrResult(
-    val text: String,
-    /** Real model score in [0,1] if the engine exposes one, otherwise null (never invented). */
-    val confidence: Float? = null,
-)
+data class AsrResult(val text: String)
 
 interface Recognizer {
     fun recognize(samples: FloatArray, sampleRate: Int): AsrResult
