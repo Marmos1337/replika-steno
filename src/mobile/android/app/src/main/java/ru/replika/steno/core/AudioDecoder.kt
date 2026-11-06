@@ -15,14 +15,19 @@ class AudioDecodeException(message: String, cause: Throwable? = null) : Exceptio
  * Mono float PCM at [SAMPLE_RATE], ready for the models. [samples] may end with a short tail of
  * zeros (the buffer is sized from the declared duration), which is silence for every model.
  */
-class DecodedAudio(val samples: FloatArray, private val containerDurationMs: Long = 0) {
+class DecodedAudio(
+    val samples: FloatArray,
+    /** Number of real decoded samples; anything after it in [samples] is the zero tail. */
+    private val decodedSamples: Int = samples.size,
+    private val containerDurationMs: Long = 0,
+) {
     /**
      * Length used for all time bounds. Decoders may emit a few extra samples (AAC priming/padding),
      * so it never exceeds the duration the file itself declares.
      */
     val durationMs: Long
         get() {
-            val decoded = samples.size * 1000L / SAMPLE_RATE
+            val decoded = decodedSamples * 1000L / SAMPLE_RATE
             return if (containerDurationMs > 0) minOf(decoded, containerDurationMs) else decoded
         }
 
@@ -147,7 +152,7 @@ object AudioDecoder {
 
             if (out.size == 0) throw AudioDecodeException("Файл не содержит звука.")
             onProgress(1f)
-            return DecodedAudio(out.result(), durationUs / 1000)
+            return DecodedAudio(out.result(), out.size, durationUs / 1000)
         } finally {
             extractor.release()
         }

@@ -174,3 +174,12 @@ class ResamplerTest {
         assertTrue(ru.replika.steno.core.AudioDecoder.resample(input, sr, sr) === input)
     }
 }
+
+class DurationTest {
+    @Test fun zeroTailNeverExtendsDuration() {
+        val a = ru.replika.steno.core.DecodedAudio(FloatArray(16_000 * 3), decodedSamples = 16_000 * 2, containerDurationMs = 2_500)
+        assertEquals(2_000L, a.durationMs)
+        val b = ru.replika.steno.core.DecodedAudio(FloatArray(16_000 * 3), decodedSamples = 16_000 * 3, containerDurationMs = 2_500)
+        assertEquals(2_500L, b.durationMs)
+    }
+}
