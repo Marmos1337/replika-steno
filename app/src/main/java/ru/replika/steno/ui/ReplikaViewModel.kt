@@ -1,5 +1,7 @@
 package ru.replika.steno.ui
 
+import ru.replika.steno.ActiveJob
+
 import android.app.Application
 import android.app.UiModeManager
 import android.content.Context
@@ -119,10 +121,13 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
             }
         }
         viewModelScope.launch {
+            var prev: ActiveJob? = null
             graph.job.collect { j ->
-                if (j != null && _jobStartedAt.value?.first != j.recordingId) {
+                // a new run starts the timer again, also when the same recording is processed once more
+                if (j != null && (prev == null || prev?.recordingId != j.recordingId)) {
                     _jobStartedAt.value = j.recordingId to SystemClock.elapsedRealtime()
                 }
+                prev = j
             }
         }
         // The engine runs one recording at a time: anything imported meanwhile waits as NEW and starts

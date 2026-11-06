@@ -116,6 +116,8 @@ object AudioDecoder {
                         }
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // CancellationException is an IllegalStateException: never report it as a broken file
             } catch (e: IllegalStateException) {
                 throw AudioDecodeException("Файл повреждён: декодер не смог его прочитать.", e)
             } finally {

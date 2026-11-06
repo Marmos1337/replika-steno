@@ -95,7 +95,9 @@ class RecordingStore(private val context: Context) {
 
     suspend fun update(id: String, block: (Recording) -> Recording) {
         val cur = get(id) ?: return
-        save(block(cur))
+        val next = block(cur)
+        if (next.state != cur.state) android.util.Log.i("Replika", "state ${id.take(8)}: ${cur.state} -> ${next.state}")
+        save(next)
     }
 
     suspend fun delete(id: String) = withContext(Dispatchers.IO) {

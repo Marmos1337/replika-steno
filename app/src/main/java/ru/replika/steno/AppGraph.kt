@@ -7,6 +7,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,11 +56,14 @@ class AppGraph(private val context: Context) {
     }
 
     fun start(recordingId: String) {
-        if (running?.isActive == true) return
+        if (running?.isActive == true) { Log.i(TAG, "start ${recordingId.take(8)} ignored: busy"); return }
+        Log.i(TAG, "start ${recordingId.take(8)}")
         running = scope.launch { process(recordingId) }
     }
 
     fun cancel() {
+        // model loading is native and cannot be interrupted, so say at once that the stop is coming
+        _job.update { it?.copy(note = "Останавливаю…") }
         running?.cancel()
     }
 
@@ -117,24 +121,35 @@ class AppGraph(private val context: Context) {
                 )
             }
             Log.i(TAG, "llm $id: ${llm.llmMs} ms")
-        } catch (e: CancellationException) {
-            if (transcriptReady) store.update(id) { it.copy(llmPending = false, llmNote = "Оформление и итоги отменены.") }
-            else store.update(id) { it.copy(state = RecordingState.FAILED, error = "Обработка отменена.") }
-        } catch (e: NoSpeechException) {
-            store.update(id) { it.copy(state = RecordingState.FAILED, error = "В записи не найдено речи. Проверьте, что файл не пустой и голос слышно.") }
-        } catch (e: AudioDecodeException) {
-            store.update(id) { it.copy(state = RecordingState.FAILED, error = e.message) }
-        } catch (e: OutOfMemoryError) {
-            if (transcriptReady) store.update(id) { it.copy(llmPending = false, llmNote = "Не хватило памяти для языковой модели.") }
-            else store.update(id) { it.copy(state = RecordingState.FAILED, error = "Не хватило памяти устройства для этой записи. Попробуйте файл короче.") }
         } catch (e: Throwable) {
-            Log.e(TAG, "processing failed", e)
-            if (transcriptReady) store.update(id) { it.copy(llmPending = false, llmNote = "Итоги не построены: ${e.message ?: e.javaClass.simpleName}") }
-            else store.update(id) { it.copy(state = RecordingState.FAILED, error = "Не удалось обработать запись: ${e.message ?: e.javaClass.simpleName}") }
+            // the coroutine may already be cancelled, so the final save must not be cancellable itself
+            withContext(NonCancellable) { fail(id, e, transcriptReady) }
         } finally {
             _job.value = null
             releaseWhenIdle()
         }
+    }
+
+    private suspend fun fail(id: String, e: Throwable, transcriptReady: Boolean) {
+        if (e is CancellationException) Log.i(TAG, "cancelled ${id.take(8)} (transcript ready: $transcriptReady)")
+        else Log.e(TAG, "processing failed", e)
+        if (transcriptReady) {
+            val note = when (e) {
+                is CancellationException -> "Оформление и итоги отменены."
+                is OutOfMemoryError -> "Не хватило памяти для языковой модели."
+                else -> "Итоги не построены: ${e.message ?: e.javaClass.simpleName}"
+            }
+            store.update(id) { it.copy(llmPending = false, llmNote = note) }
+            return
+        }
+        val error = when (e) {
+            is CancellationException -> "Обработка отменена."
+            is NoSpeechException -> "В записи не найдено речи. Проверьте, что файл не пустой и голос слышно."
+            is AudioDecodeException -> e.message ?: "Не удалось прочитать файл."
+            is OutOfMemoryError -> "Не хватило памяти устройства для этой записи. Попробуйте файл короче."
+            else -> "Не удалось обработать запись: ${e.message ?: e.javaClass.simpleName}"
+        }
+        store.update(id) { it.copy(state = RecordingState.FAILED, error = error) }
     }
 
     /**
