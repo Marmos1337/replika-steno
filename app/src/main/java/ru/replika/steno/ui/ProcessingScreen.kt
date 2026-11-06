@@ -193,7 +193,7 @@ private fun StageRow(stage: Stage, state: Int, fraction: Float, waitingForModels
         Text(
             when (state) {
                 2 -> "готово"
-                1 -> if (waitingForModels) "подготовка" else "${(fraction * 100).toInt()}%"
+                1 -> if (waitingForModels) "загрузка моделей" else "${(fraction * 100).toInt()}%"
                 else -> ""
             },
             style = Type.labelNum, color = c.muted,

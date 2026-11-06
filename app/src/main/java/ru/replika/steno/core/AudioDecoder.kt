@@ -61,7 +61,7 @@ object AudioDecoder {
                 while (!outputDone) {
                     coroutineContext.ensureActive()
                     if (!inputDone) {
-                        val inIdx = codec.dequeueInputBuffer(10_000)
+                        val inIdx = codec.dequeueInputBuffer(1_000)
                         if (inIdx >= 0) {
                             val buf = codec.getInputBuffer(inIdx)!!
                             val size = extractor.readSampleData(buf, 0)
@@ -75,7 +75,7 @@ object AudioDecoder {
                             }
                         }
                     }
-                    val outIdx = codec.dequeueOutputBuffer(info, 10_000)
+                    val outIdx = codec.dequeueOutputBuffer(info, 1_000)
                     when {
                         outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                             val of = codec.outputFormat

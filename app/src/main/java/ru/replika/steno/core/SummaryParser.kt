@@ -16,7 +16,7 @@ object SummaryParser {
      * The bundled model has a 1280-token window, so a meeting is summarised in windows of numbered
      * lines. Numbering is global, so references stay valid for the whole transcript.
      */
-    fun windows(utts: List<Utterance>, maxChars: Int = 1_600, maxWindows: Int = 8): List<String> {
+    fun windows(utts: List<Utterance>, maxChars: Int = 1_200, maxWindows: Int = 10): List<String> {
         val out = ArrayList<String>()
         val sb = StringBuilder()
         for ((i, u) in utts.withIndex()) {
@@ -57,6 +57,8 @@ object SummaryParser {
                 .map { it - 1 }.filter { it in utts.indices }.distinct().toList()
             val text = REF.replace(body, "").trim().trimEnd(',', ';', '.').trim()
             if (refs.isEmpty() || text.length < 3) continue
+            val cited = refs.joinToString(" ") { utts[it].text }
+            if (!grounded(text.substringBefore('|'), cited)) continue
             when (section) {
                 Section.SUMMARY -> points += SummaryPoint(text, refs, PointKind.SUMMARY)
                 Section.DECISION -> points += SummaryPoint(text, refs, PointKind.DECISION)
@@ -65,7 +67,7 @@ object SummaryParser {
                     val parts = text.split('|').map { it.trim() }
                     val what = parts[0]
                     if (what.length < 3) continue
-                    val said = refs.joinToString(" ") { utts[it].text }
+                    val said = cited
                     actions += ActionItem(
                         text = what,
                         speakerId = utts[refs.first()].speakerId,
@@ -78,6 +80,17 @@ object SummaryParser {
             }
         }
         return MeetingSummary(points.take(24), actions.take(12))
+    }
+
+    /**
+     * A point must be about what the cited lines say: at least one of its content words (5+ letters,
+     * compared by a 5-letter stem) has to occur there. This drops template echoes and invented points.
+     */
+    fun grounded(text: String, cited: String): Boolean {
+        val content = TextGuard.words(text).filter { it.length >= 5 }
+        if (content.isEmpty()) return false
+        val saidStems = TextGuard.words(cited).filter { it.length >= 5 }.map { it.take(5) }.toSet()
+        return content.any { it.take(5) in saidStems }
     }
 
     /** Keeps [value] only if every word of it (by a 4-letter stem) occurs in [said]. */

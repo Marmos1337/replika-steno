@@ -24,11 +24,23 @@ object TextGuard {
         return if (sameWords(raw, f)) f else raw
     }
 
+    /** Upper-cases the first letter of the text and of every sentence after . ! ? … */
+    fun capitalizeSentences(t: String): String {
+        val sb = StringBuilder(t.length)
+        var start = true
+        for (c in t) {
+            if (start && c.isLetter()) { sb.append(c.uppercaseChar()); start = false; continue }
+            sb.append(c)
+            if (c in ".!?…") start = true else if (!c.isWhitespace()) start = false
+        }
+        return sb.toString()
+    }
+
     /** Cheap deterministic fallback used when the LLM is off or rejected: capitalize the first letter and end with a period. */
     fun tidy(raw: String): String {
         val t = raw.trim().replace(Regex("\\s+"), " ")
         if (t.isEmpty()) return t
-        val cap = t.replaceFirstChar { it.uppercaseChar() }
+        val cap = capitalizeSentences(t)
         return if (cap.last() in ".!?…") cap else "$cap."
     }
 }

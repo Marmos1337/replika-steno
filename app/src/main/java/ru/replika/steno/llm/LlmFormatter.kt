@@ -3,6 +3,7 @@ package ru.replika.steno.llm
 import android.content.Context
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
+import com.google.mediapipe.tasks.genai.llminference.PromptTemplates
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,20 +18,37 @@ class LlmFormatter private constructor(private val llm: LlmInference) : Formatte
 
     override val name = "Qwen2.5-0.5B-Instruct q8 (MediaPipe LLM Inference)"
 
-    private fun ask(system: String, user: String): String {
+    private fun ask(system: String, user: String, example: Pair<String, String>? = null): String {
         val session = LlmInferenceSession.createFromOptions(
             llm,
             LlmInferenceSession.LlmInferenceSessionOptions.builder()
                 .setTopK(1)
                 .setTemperature(0f)
                 .setRandomSeed(7)
+                // the .task bundle carries its own chat template; we send the full Qwen ChatML ourselves
+                .setPromptTemplates(
+                    PromptTemplates.builder()
+                        .setSystemPrefix("").setSystemSuffix("")
+                        .setUserPrefix("").setUserSuffix("")
+                        .setModelPrefix("").setModelSuffix("")
+                        .build(),
+                )
                 .build(),
         )
         try {
+            val t0 = android.os.SystemClock.elapsedRealtime()
             session.addQueryChunk(
-                "<|im_start|>system\n$system<|im_end|>\n<|im_start|>user\n$user<|im_end|>\n<|im_start|>assistant\n",
+                buildString {
+                    append("<|im_start|>system\n$system<|im_end|>\n")
+                    if (example != null) {
+                        append("<|im_start|>user\n${example.first}<|im_end|>\n<|im_start|>assistant\n${example.second}<|im_end|>\n")
+                    }
+                    append("<|im_start|>user\n$user<|im_end|>\n<|im_start|>assistant\n")
+                },
             )
-            return session.generateResponse()
+            val answer = session.generateResponse()
+            android.util.Log.i("Replika", "llm ${android.os.SystemClock.elapsedRealtime() - t0} ms, prompt ${user.length} chars, answer: ${answer.take(700).replace('\n', '⏎')}")
+            return answer
         } finally {
             session.close()
         }
@@ -54,24 +72,7 @@ class LlmFormatter private constructor(private val llm: LlmInference) : Formatte
 
     override suspend fun summarize(numberedTranscript: String): String = withContext(Dispatchers.Default) {
         synchronized(this@LlmFormatter) {
-            ask(
-                "Ты помощник, который кратко подводит итоги рабочей встречи по стенограмме. Пиши только то, что есть в стенограмме.",
-                buildString {
-                    appendLine("Стенограмма (в квадратных скобках номер реплики):")
-                    append(numberedTranscript)
-                    appendLine()
-                    appendLine("Ответь строго в формате, каждый пункт с номерами реплик в квадратных скобках:")
-                    appendLine("КРАТКО:")
-                    appendLine("- о чём говорили [1, 2]")
-                    appendLine("РЕШЕНИЯ:")
-                    appendLine("- что решили [3]")
-                    appendLine("ВОПРОСЫ:")
-                    appendLine("- что осталось нерешённым [4]")
-                    appendLine("ПОРУЧЕНИЯ:")
-                    appendLine("- что сделать | кто должен сделать | срок [5]")
-                    appendLine("Пиши только то, что сказано в стенограмме. Если исполнитель или срок не названы, ставь «-». Пустой раздел оставь пустым.")
-                },
-            )
+            ask(SUMMARY_SYSTEM, SUMMARY_ASK + numberedTranscript, SUMMARY_EXAMPLE)
         }
     }
 
@@ -79,6 +80,23 @@ class LlmFormatter private constructor(private val llm: LlmInference) : Formatte
 
     companion object {
         private val LINE = Regex("^(\\d+)[).:]\\s*(.+)$")
+
+        private const val SUMMARY_SYSTEM =
+            "Ты подводишь итоги рабочей встречи по стенограмме. Пиши только то, что сказано в стенограмме. " +
+                "Каждый пункт заканчивай номерами реплик в квадратных скобках. Если исполнитель или срок не названы, ставь «-». " +
+                "Пустой раздел оставляй пустым."
+        private const val SUMMARY_ASK = "Стенограмма:\n"
+
+        /** One-shot example with unrelated content; SummaryParser drops anything not grounded in the cited lines. */
+        private val SUMMARY_EXAMPLE = SUMMARY_ASK +
+            "[1] speaker_1: Нам нужно выбрать подрядчика для ремонта склада.\n" +
+            "[2] speaker_2: Предлагаю компанию «Вектор», у них самая низкая цена.\n" +
+            "[3] speaker_1: Согласен, берём «Вектор». Олег, подготовь договор до понедельника.\n" +
+            "[4] speaker_2: А кто будет принимать работу, пока непонятно.\n" to
+            "КРАТКО:\n- Выбирали подрядчика для ремонта склада [1, 2]\n" +
+            "РЕШЕНИЯ:\n- Подрядчиком выбрана компания «Вектор» [2, 3]\n" +
+            "ВОПРОСЫ:\n- Непонятно, кто будет принимать работу [4]\n" +
+            "ПОРУЧЕНИЯ:\n- Подготовить договор | Олег | до понедельника [3]"
         /** KV cache of the bundled model: prompt + answer must fit into it. */
         const val CONTEXT_TOKENS = 1280
 

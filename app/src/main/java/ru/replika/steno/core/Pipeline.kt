@@ -66,7 +66,7 @@ class Pipeline(
             val r = recognizer.recognize(Segments.slice(audio.samples, sr, p.startMs, p.endMs), sr)
             val text = r.text.trim()
             if (text.isNotEmpty()) {
-                utterances += Utterance(ids.getValue(p.cluster), p.startMs, p.endMs, text, text, p.confidence, lang = r.lang)
+                utterances += Utterance(ids.getValue(p.cluster), p.startMs, p.endMs, TextGuard.tidy(text), text, p.confidence, lang = r.lang)
             }
             onProgress(Progress(Stage.RECOGNIZE, (i + 1f) / pieces.size))
         }
@@ -99,7 +99,7 @@ class Pipeline(
             chunk.forEachIndexed { k, u ->
                 val candidate = answers?.getOrNull(k)
                 val accepted = TextGuard.accept(u.rawText, candidate)
-                out += u.copy(text = if (accepted === u.rawText || accepted == u.rawText) TextGuard.tidy(u.rawText) else accepted)
+                out += u.copy(text = TextGuard.tidy(accepted))
             }
             i += batch
             onProgress(Progress(Stage.FORMAT, i.toFloat() / utts.size))
