@@ -8,3 +8,6 @@ corrupt-random,2026-11-06T19:54:00Z,6af9d4f,corrupted_random.mp3,300000,,emulato
 corrupt-truncated,2026-11-06T19:55:00Z,6af9d4f,corrupted_truncated.m4a,20000,,emulator API36 arm64 4vCPU 3GB,,,,,,,,,,,true,"expected failure: «В файле нет звуковой дорожки», no crash"
 cancel,2026-11-06T20:36:00Z,6d0a491,long_mixed_6min.m4a,2964756,373.501,emulator API36 arm64 4vCPU 3GB,,,,,,,,,,,true,"«Отменить» → «Обработка отменена», no crash"
 kill,2026-11-06T21:30:00Z,dfd13cc,ru_dialog_2voices.m4a,398596,47.703,emulator API36 arm64 4vCPU 3GB,,,,,,,,,,,true,"am force-stop during re-run → previous transcript kept"
+ru-final,2026-11-06T22:05:00Z,0e1ed3b,ru_dialog_2voices.m4a,398596,47.703,emulator API36 arm64 4vCPU 3GB,,8006,0.17,,32245,0.0118,0.9988,2,2,true,true,after logic review fixes; models warm
+en-final,2026-11-06T22:04:00Z,0e1ed3b,en_dialog_2voices.mp3,44180,14.546,emulator API36 arm64 4vCPU 3GB,,7275,0.50,,15868,0.0303,0.9935,2,2,true,true,after logic review fixes
+long-final,2026-11-06T22:10:00Z,0e1ed3b,long_mixed_6min.m4a,2964756,373.501,emulator API36 arm64 4vCPU 3GB,,58066,0.16,,156194,0.0297,0.9863,4,4,true,true,after logic review fixes; streaming decode
