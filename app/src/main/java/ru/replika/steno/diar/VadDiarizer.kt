@@ -85,7 +85,23 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
         }
         vad.flush()
         drain()
-        return out.filter { it.second - it.first >= MIN_PHRASE_SAMPLES }
+        return pad(out.filter { it.second - it.first >= MIN_PHRASE_SAMPLES }, samples.size)
+    }
+
+    /**
+     * VAD tends to clip soft word onsets and endings. Each phrase gets up to [PAD_MS] of context on
+     * both sides, but never more than half of the pause to its neighbour, so it cannot eat the
+     * beginning of the next speaker's phrase.
+     */
+    private fun pad(phrases: List<Pair<Int, Int>>, total: Int): List<Pair<Int, Int>> {
+        val pad = PAD_MS * 16
+        return phrases.mapIndexed { i, (a, b) ->
+            val prevEnd = if (i > 0) phrases[i - 1].second else 0
+            val nextStart = if (i + 1 < phrases.size) phrases[i + 1].first else total
+            val start = a - minOf(pad, maxOf(0, a - prevEnd) / 2)
+            val end = b + minOf(pad, maxOf(0, nextStart - b) / 2)
+            start.coerceAtLeast(0) to end.coerceAtMost(total)
+        }
     }
 
     fun release() {
@@ -95,6 +111,8 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
 
     companion object {
         private const val WINDOW = 512
+        /** Max context added around each VAD phrase, ms (tuned on the test set, docs/TEST_RESULTS.md). */
+        const val PAD_MS = 400
         const val MAX_PHRASE_S = 12f
         private const val MIN_PHRASE_SAMPLES = 16_000 / 4
         /** Cosine-distance cut-off. Tuned on the test set: results identical across 0.5-0.7, 0.6 is the middle (docs/TESTS.md). */

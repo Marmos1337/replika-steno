@@ -60,7 +60,8 @@ class NemoCtc(assets: AssetManager, model: String, tokens: String) {
  */
 class SherpaRecognizer(private val assets: AssetManager) : Recognizer {
     private val ru = NemoCtc(assets, ModelAssets.ASR_MODEL, ModelAssets.ASR_TOKENS)
-    private val en by lazy { NemoCtc(assets, ModelAssets.ASR_EN_MODEL, ModelAssets.ASR_EN_TOKENS) }
+    private val enLazy = lazy { NemoCtc(assets, ModelAssets.ASR_EN_MODEL, ModelAssets.ASR_EN_TOKENS) }
+    private val en by enLazy
 
     override fun recognize(samples: FloatArray, sampleRate: Int): AsrResult {
         if (samples.size < sampleRate / 10) return AsrResult("")
@@ -70,7 +71,10 @@ class SherpaRecognizer(private val assets: AssetManager) : Recognizer {
         return if (textEn.isNotBlank()) AsrResult(textEn, "en") else AsrResult(textRu, "ru")
     }
 
-    fun release() = ru.release()
+    fun release() {
+        ru.release()
+        if (enLazy.isInitialized()) en.release()
+    }
 
     companion object {
         fun latinShare(s: String): Float {

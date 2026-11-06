@@ -5,6 +5,7 @@ import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -132,6 +133,24 @@ class AppGraph(private val context: Context) {
             else store.update(id) { it.copy(state = RecordingState.FAILED, error = "Не удалось обработать запись: ${e.message ?: e.javaClass.simpleName}") }
         } finally {
             _job.value = null
+            releaseWhenIdle()
+        }
+    }
+
+    /**
+     * Models take ~1.5 GB while working. The LLM is closed right after its pass; the speech models are
+     * kept for [IDLE_RELEASE_MS] in case the next recording is queued, then freed too.
+     */
+    private fun releaseWhenIdle() {
+        scope.launch {
+            engineLock.withLock { llm?.close(); llm = null }
+            delay(IDLE_RELEASE_MS)
+            engineLock.withLock {
+                if (running?.isActive == true) return@withLock
+                recognizer?.release(); recognizer = null
+                diarizer?.release(); diarizer = null
+                Log.i(TAG, "engines released")
+            }
         }
     }
 
@@ -155,5 +174,8 @@ class AppGraph(private val context: Context) {
         }
     }
 
-    companion object { private const val TAG = "Replika" }
+    companion object {
+        private const val TAG = "Replika"
+        private const val IDLE_RELEASE_MS = 30_000L
+    }
 }

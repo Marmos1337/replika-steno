@@ -12,8 +12,16 @@ import kotlinx.coroutines.ensureActive
 class AudioDecodeException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /** Mono float PCM at [SAMPLE_RATE], ready for the models. */
-class DecodedAudio(val samples: FloatArray) {
-    val durationMs: Long get() = samples.size * 1000L / SAMPLE_RATE
+class DecodedAudio(val samples: FloatArray, private val containerDurationMs: Long = 0) {
+    /**
+     * Length used for all time bounds. Decoders may emit a few extra samples (AAC priming/padding),
+     * so it never exceeds the duration the file itself declares.
+     */
+    val durationMs: Long
+        get() {
+            val decoded = samples.size * 1000L / SAMPLE_RATE
+            return if (containerDurationMs > 0) minOf(decoded, containerDurationMs) else decoded
+        }
 
     companion object {
         const val SAMPLE_RATE = 16_000
@@ -118,7 +126,7 @@ object AudioDecoder {
             val raw = mono.toArray()
             if (raw.isEmpty()) throw AudioDecodeException("Файл не содержит звука.")
             onProgress(1f)
-            return DecodedAudio(resample(raw, srcRate, DecodedAudio.SAMPLE_RATE))
+            return DecodedAudio(resample(raw, srcRate, DecodedAudio.SAMPLE_RATE), durationUs / 1000)
         } finally {
             extractor.release()
         }

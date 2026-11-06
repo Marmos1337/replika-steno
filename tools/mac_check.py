@@ -7,6 +7,7 @@ import sherpa_onnx
 
 M = __file__.rsplit("/tools/", 1)[0] + "/app/src/main/assets/models"
 SR = 16000
+PAD_MS = int(__import__("os").environ.get("PAD_MS", "400"))
 
 def load(p):
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", p, "-f", "f32le", "-ac", "1", "-ar", str(SR), "-"], check=True, capture_output=True).stdout
@@ -28,7 +29,14 @@ def vad_phrases(x):
     for i in range(0, len(x), 512):
         vad.accept_waveform(x[i:i + 512]); drain()
     vad.flush(); drain()
-    return [(a, min(b, len(x))) for a, b in out if b - a >= SR // 4]
+    out = [(a, min(b, len(x))) for a, b in out if b - a >= SR // 4]
+    pad = int(PAD_MS * SR / 1000)
+    res = []
+    for i, (a, b) in enumerate(out):
+        prev_end = out[i - 1][1] if i > 0 else 0
+        next_start = out[i + 1][0] if i + 1 < len(out) else len(x)
+        res.append((max(0, a - min(pad, max(0, a - prev_end) // 2)), min(len(x), b + min(pad, max(0, next_start - b) // 2))))
+    return res
 
 def cluster(E, thr):
     E = E / np.linalg.norm(E, axis=1, keepdims=True)
@@ -75,10 +83,16 @@ def main():
         turns = normalize([(a * 1000 // SR, b * 1000 // SR, int(l), float(f)) for (a, b), l, f in zip(ph, lab, conf)], dur)
     t1 = time.time()
     asr = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(model=f"{M}/asr/model.int8.onnx", tokens=f"{M}/asr/tokens.txt", num_threads=4)
+    asr_en = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(model=f"{M}/asr_en/model.int8.onnx", tokens=f"{M}/asr_en/tokens.txt", num_threads=4)
+    def latin(s):
+        l = [c for c in s if c.isalpha()]
+        return sum(c.isascii() for c in l) / len(l) if l else 0
     ids = {}; res = []
     for a, b, c, f in turns:
         st = asr.create_stream(); st.accept_waveform(SR, x[a * SR // 1000:b * SR // 1000]); asr.decode_stream(st)
         t = st.result.text.strip()
+        if latin(t) > 0.5:
+            st = asr_en.create_stream(); st.accept_waveform(SR, x[a * SR // 1000:b * SR // 1000]); asr_en.decode_stream(st); t = st.result.text.strip()
         if t: res.append({"speaker_id": ids.setdefault(c, f"speaker_{len(ids) + 1}"), "start_ms": a, "end_ms": b, "text": t, "_conf": round(f, 3)})
     t2 = time.time()
     print(f"# audio {dur/1000:.1f}s  diar {t1-t0:.2f}s  asr {t2-t1:.2f}s  speakers {len(ids)}  utterances {len(res)}  phrases {len(ph)}")
