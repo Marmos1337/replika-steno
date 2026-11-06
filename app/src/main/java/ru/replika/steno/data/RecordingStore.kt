@@ -30,6 +30,9 @@ class RecordingStore(private val context: Context) {
     private val root = File(context.filesDir, "recordings").apply { mkdirs() }
     private val _items = MutableStateFlow<List<Recording>>(emptyList())
     val items: StateFlow<List<Recording>> = _items.asStateFlow()
+    private val _loaded = MutableStateFlow(false)
+    /** False until the first [load] finished, so the UI does not flash an empty library on start. */
+    val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
 
     suspend fun load() = withContext(Dispatchers.IO) {
         val list = root.listFiles { f -> f.isDirectory }.orEmpty().mapNotNull { dir ->
@@ -39,6 +42,7 @@ class RecordingStore(private val context: Context) {
             if (it.state == RecordingState.PROCESSING) it.copy(state = RecordingState.FAILED, error = "Обработка была прервана. Запустите её снова.") else it
         }
         _items.value = list.sortedByDescending { it.createdAtMs }
+        _loaded.value = true
     }
 
     fun get(id: String): Recording? = _items.value.firstOrNull { it.id == id }
@@ -115,6 +119,8 @@ class RecordingStore(private val context: Context) {
                         put("speakerId", u.speakerId); put("startMs", u.startMs); put("endMs", u.endMs)
                         put("text", u.text); put("rawText", u.rawText)
                         u.speakerConfidence?.let { put("speakerConfidence", it.toDouble()) }
+                        put("lang", u.lang)
+                        if (u.edited) put("edited", true)
                     })
                 }
             })
@@ -150,6 +156,8 @@ class RecordingStore(private val context: Context) {
                         text = u.getString("text"),
                         rawText = u.optString("rawText", u.getString("text")),
                         speakerConfidence = if (u.has("speakerConfidence")) u.getDouble("speakerConfidence").toFloat() else null,
+                        lang = u.optString("lang", "ru"),
+                        edited = u.optBoolean("edited", false),
                     )
                 }
             } ?: emptyList()

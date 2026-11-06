@@ -6,7 +6,8 @@ interface Diarizer {
     suspend fun diarize(samples: FloatArray, sampleRate: Int, onProgress: (Float) -> Unit): List<SpeakerTurn>
 }
 
-data class AsrResult(val text: String)
+/** [lang] is "ru" or "en": which model produced the text. */
+data class AsrResult(val text: String, val lang: String = "ru")
 
 interface Recognizer {
     fun recognize(samples: FloatArray, sampleRate: Int): AsrResult

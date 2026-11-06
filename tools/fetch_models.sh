@@ -5,7 +5,7 @@ set -eu
 cd "$(dirname "$0")/.."
 CACHE=models-cache
 ASSETS=app/src/main/assets/models
-mkdir -p "$CACHE" "$ASSETS/asr" "$ASSETS/diar" "$ASSETS/llm" app/libs
+mkdir -p "$CACHE" "$ASSETS/asr" "$ASSETS/asr_en" "$ASSETS/diar" "$ASSETS/llm" app/libs
 
 get() { # url file
   [ -s "$2" ] && { echo "have $2"; return; }
@@ -25,14 +25,18 @@ if [ ! -s "$ASSETS/asr/model.int8.onnx" ]; then
   cp "$d/model.int8.onnx" "$d/tokens.txt" "$ASSETS/asr/"
 fi
 
-# Diarization: pyannote segmentation 3.0 + 3D-Speaker CAM++ embeddings
-get $REL/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2 "$CACHE/pyannote.tar.bz2"
-if [ ! -s "$ASSETS/diar/segmentation.onnx" ]; then
-  tar -xjf "$CACHE/pyannote.tar.bz2" -C "$CACHE"
-  d=$(find "$CACHE" -maxdepth 1 -type d -name "*pyannote-segmentation-3-0*" | head -1)
-  if [ -s "$d/model.int8.onnx" ]; then cp "$d/model.int8.onnx" "$ASSETS/diar/segmentation.onnx"; else cp "$d/model.onnx" "$ASSETS/diar/segmentation.onnx"; fi
+# English ASR: NeMo Parakeet TDT-CTC 110M (punctuation + casing), int8; used for phrases GigaAM writes in Latin
+get $REL/asr-models/sherpa-onnx-nemo-parakeet_tdt_ctc_110m-en-36000-int8.tar.bz2 "$CACHE/parakeet.tar.bz2"
+if [ ! -s "$ASSETS/asr_en/model.int8.onnx" ]; then
+  mkdir -p "$ASSETS/asr_en"
+  tar -xjf "$CACHE/parakeet.tar.bz2" -C "$CACHE"
+  d=$(find "$CACHE" -maxdepth 1 -type d -name "*parakeet_tdt_ctc_110m*" | head -1)
+  cp "$d/model.int8.onnx" "$d/tokens.txt" "$ASSETS/asr_en/"
 fi
-get $REL/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx "$ASSETS/diar/embedding.onnx"
+
+# Diarization: Silero VAD (phrases) + NeMo TitaNet-small (voice embeddings); clustering is in app code
+get $REL/asr-models/silero_vad.onnx "$ASSETS/diar/silero_vad.onnx"
+get $REL/speaker-recongition-models/nemo_en_titanet_small.onnx "$ASSETS/diar/titanet_small.onnx"
 
 # Local LLM: Qwen2.5-0.5B-Instruct for MediaPipe LLM Inference (apache-2.0, ungated)
 get https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task "$ASSETS/llm/qwen2.5-0.5b-instruct-q8.task"

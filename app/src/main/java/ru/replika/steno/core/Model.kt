@@ -17,6 +17,8 @@ data class Utterance(
      * (similarity to the speaker's cluster). Null when the model did not report one. Never invented.
      */
     val speakerConfidence: Float? = null,
+    /** True once the user edited [text] by hand; [rawText] always keeps the recognizer output. */
+    val edited: Boolean = false,
 )
 
 data class Recording(

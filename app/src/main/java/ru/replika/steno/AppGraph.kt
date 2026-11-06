@@ -16,7 +16,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import ru.replika.steno.asr.SherpaDiarizer
 import ru.replika.steno.asr.SherpaRecognizer
 import ru.replika.steno.core.AudioDecodeException
 import ru.replika.steno.core.AudioDecoder
@@ -27,6 +26,7 @@ import ru.replika.steno.core.RecordingState
 import ru.replika.steno.core.Stage
 import ru.replika.steno.data.RecordingStore
 import ru.replika.steno.data.Settings
+import ru.replika.steno.diar.VadDiarizer
 import ru.replika.steno.llm.LlmFormatter
 
 /** Live state of the one recording being processed. */
@@ -43,7 +43,7 @@ class AppGraph(private val context: Context) {
 
     private val engineLock = Mutex()
     private var recognizer: SherpaRecognizer? = null
-    private var diarizer: SherpaDiarizer? = null
+    private var diarizer: VadDiarizer? = null
     private var llm: LlmFormatter? = null
     /** Why the LLM is not in use, if it is not. Shown on the About screen. */
     @Volatile var llmStatus: String = "ещё не загружена"
@@ -104,11 +104,11 @@ class AppGraph(private val context: Context) {
         }
     }
 
-    private suspend fun engines(note: (String) -> Unit): Triple<SherpaRecognizer, SherpaDiarizer, LlmFormatter?> =
+    private suspend fun engines(note: (String) -> Unit): Triple<SherpaRecognizer, VadDiarizer, LlmFormatter?> =
         engineLock.withLock {
             withContext(Dispatchers.IO) {
                 val r = recognizer ?: run { note("Загрузка модели распознавания"); SherpaRecognizer(context.assets) }.also { recognizer = it }
-                val d = diarizer ?: run { note("Загрузка модели голосов"); SherpaDiarizer(context.assets) }.also { diarizer = it }
+                val d = diarizer ?: run { note("Загрузка модели голосов"); VadDiarizer(context.assets) }.also { diarizer = it }
                 val wantLlm = settings.llmEnabled.first()
                 val l = if (!wantLlm) {
                     llmStatus = "выключена в настройках"; null

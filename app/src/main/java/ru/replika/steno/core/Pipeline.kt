@@ -66,7 +66,7 @@ class Pipeline(
             val r = recognizer.recognize(Segments.slice(audio.samples, sr, p.startMs, p.endMs), sr)
             val text = r.text.trim()
             if (text.isNotEmpty()) {
-                utterances += Utterance(ids.getValue(p.cluster), p.startMs, p.endMs, text, text, p.confidence)
+                utterances += Utterance(ids.getValue(p.cluster), p.startMs, p.endMs, text, text, p.confidence, r.lang)
             }
             onProgress(Progress(Stage.RECOGNIZE, (i + 1f) / pieces.size))
         }

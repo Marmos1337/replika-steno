@@ -95,3 +95,25 @@ class SummaryParserTest {
         assertEquals("Подготовить сборку к пятнице", s.actions[0].text)
     }
 }
+
+class ClusteringTest {
+    @Test fun groupsByDirectionWithoutPresetCount() {
+        val a = floatArrayOf(1f, 0.05f, 0f); val a2 = floatArrayOf(0.95f, 0f, 0.1f)
+        val b = floatArrayOf(0f, 1f, 0.05f); val b2 = floatArrayOf(0.1f, 0.9f, 0f)
+        val c = floatArrayOf(0f, 0f, 1f)
+        val r = ru.replika.steno.diar.Clustering.cluster(listOf(a, b, a2, b2, c, a), threshold = 0.6f)
+        assertEquals(listOf(0, 1, 0, 1, 2, 0), r.labels.toList())
+        assertTrue(r.confidence.all { it > 0.9f })
+        val one = ru.replika.steno.diar.Clustering.cluster(listOf(a, b, c), threshold = 2f)
+        assertEquals(setOf(0), one.labels.toSet())
+    }
+}
+
+class LanguageRoutingTest {
+    @Test fun latinShareDecidesRouting() {
+        assertTrue(ru.replika.steno.asr.SherpaRecognizer.latinShare("Tom Dedyo Finish the Cortely Report") > 0.9f)
+        assertTrue(ru.replika.steno.asr.SherpaRecognizer.latinShare("Добрый день, коллеги. Релиз в пятницу") < 0.1f)
+        assertTrue(ru.replika.steno.asr.SherpaRecognizer.latinShare("Обновим API и SDK завтра") < 0.5f)
+        assertEquals(0f, ru.replika.steno.asr.SherpaRecognizer.latinShare("123 ..."))
+    }
+}
