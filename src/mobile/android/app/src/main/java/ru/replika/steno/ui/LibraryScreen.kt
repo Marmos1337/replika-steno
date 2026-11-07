@@ -61,7 +61,6 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
     val job by vm.job.collectAsState()
     val importing by vm.importing.collectAsState()
     var query by rememberSaveable { mutableStateOf("") }
-    var micOpen by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf<Recording?>(null) }
     var confirmRerun by remember { mutableStateOf<Recording?>(null) }
 
@@ -114,7 +113,7 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
                             EmptyState(
                                 title = "Пока нет записей",
-                                text = "Импортируйте запись встречи или запишите её с микрофона.",
+                                text = "Начните живую запись встречи — текст пойдёт сразу — или импортируйте готовый файл.",
                             )
                         }
                     }
@@ -137,7 +136,13 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                             RecordingRow(
                                 r, job,
                                 onOpen = {
-                                    vm.navigate(if (r.state == RecordingState.READY) Screen.Transcript(r.id) else Screen.Processing(r.id))
+                                    vm.navigate(
+                                        when {
+                                            vm.isLiveRecording(r.id) -> Screen.Live
+                                            r.state == RecordingState.READY -> Screen.Transcript(r.id)
+                                            else -> Screen.Processing(r.id)
+                                        },
+                                    )
                                 },
                                 onDelete = { confirmDelete = r },
                                 onRerun = { if (r.state == RecordingState.READY) confirmRerun = r else vm.reprocess(r.id) },
@@ -153,19 +158,31 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
         // then a solid strip of the page color, so cards slide under it without a seam.
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
             Box(Modifier.fillMaxWidth().height(Size.fade).background(Brush.verticalGradient(listOf(c.bg.copy(alpha = 0f), c.bg))))
-            Row(
+            BoxWithConstraints(
                 Modifier.fillMaxWidth().background(c.bg).navigationBarsPadding()
                     .padding(start = side, end = side, bottom = Space.l),
-                horizontalArrangement = Arrangement.spacedBy(Space.s),
-                verticalAlignment = Alignment.CenterVertically,
             ) {
-                PrimaryButton(if (importing) "Копирую файл…" else "Импортировать аудио", pick, Modifier.weight(1f), Ic.File, enabled = !importing)
-                OutlineIconButton(Ic.Mic, "Записать с микрофона", { micOpen = true })
+                // Live recording leads (it records, keeps the audio and then processes it like an import).
+                // On a phone the import keeps a short label so both fit on one row without clipping.
+                val roomy = maxWidth >= 440.dp
+                val withIcon = maxWidth >= 340.dp
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
+                    PrimaryButton("Живая запись", { vm.navigate(Screen.Live) }, Modifier.weight(1f), Ic.Mic)
+                    SecondaryButton(
+                        when {
+                            importing -> if (roomy) "Копирую файл…" else "Копирую…"
+                            roomy -> "Импортировать аудио"
+                            else -> "Импорт"
+                        },
+                        pick,
+                        icon = if (withIcon) Ic.File else null,
+                        enabled = !importing,
+                    )
+                }
             }
         }
     }
 
-    if (micOpen) MicSheet(vm, onClose = { micOpen = false })
     confirmDelete?.let { r ->
         ConfirmDialog(
             title = "Удалить запись?",

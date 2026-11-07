@@ -14,9 +14,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +31,7 @@ import ru.replika.steno.ReplikaApp
 import ru.replika.steno.core.Recording
 import ru.replika.steno.core.RecordingState
 import ru.replika.steno.core.live.LiveState
+import ru.replika.steno.core.live.LiveStatus
 import ru.replika.steno.data.ThemeMode
 import ru.replika.steno.export.TranscriptJson
 
@@ -51,12 +49,15 @@ enum class ExportFormat(val ext: String, val mime: String) {
 sealed interface Screen {
     data object Library : Screen
     data object About : Screen
+    /** Live recording: the session in progress, or the start screen when there is none. */
+    data object Live : Screen
     data class Processing(val id: String) : Screen
     data class Transcript(val id: String) : Screen
 
     fun encode(): String = when (this) {
         Library -> "library"
         About -> "about"
+        Live -> "live"
         is Processing -> "processing:$id"
         is Transcript -> "transcript:$id"
     }
@@ -65,6 +66,7 @@ sealed interface Screen {
         fun decode(s: String?): Screen = when {
             s == null -> Library
             s == "about" -> About
+            s == "live" -> Live
             s.startsWith("processing:") -> Processing(s.substringAfter(':'))
             s.startsWith("transcript:") -> Transcript(s.substringAfter(':'))
             else -> Library
@@ -73,13 +75,6 @@ sealed interface Screen {
 }
 
 data class Toast(val text: String, val id: Long = SystemClock.elapsedRealtimeNanos())
-
-sealed interface MicState {
-    data object Idle : MicState
-    data class Recording(val startedAt: Long) : MicState
-    data object Saving : MicState
-    data class Failed(val message: String) : MicState
-}
 
 class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : AndroidViewModel(app) {
     val graph = (app as ReplikaApp).graph
@@ -111,10 +106,6 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
     /** Wide screens: the permanent panel is collapsed to a rail. Persisted between launches. */
     val railCollapsed: StateFlow<Boolean> = _railCollapsed.asStateFlow()
 
-    private val mic = MicRecorder(app)
-    private val _mic = MutableStateFlow<MicState>(MicState.Idle)
-    val micState: StateFlow<MicState> = _mic.asStateFlow()
-
     init {
         viewModelScope.launch {
             graph.settings.theme.collect { mode ->
@@ -141,6 +132,13 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
                 val next = items.filter { it.state == RecordingState.NEW }.minByOrNull { it.createdAtMs } ?: return@collectLatest
                 delay(300)
                 graph.start(next.id)
+            }
+        }
+        // A take that finished while the live screen was not shown (Stop in the notification, a file
+        // test that ran out) is simply handed over: the library row shows its processing.
+        viewModelScope.launch {
+            graph.live.collect { s ->
+                if (s?.status == LiveStatus.DONE && _screen.value != Screen.Live) graph.dismissLive()
             }
         }
     }
@@ -203,6 +201,7 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
     }
 
     fun reprocess(id: String) {
+        if (isLiveRecording(id)) { navigate(Screen.Live); return }
         viewModelScope.launch {
             store.update(id) { it.copy(state = RecordingState.NEW, error = null) }
             graph.start(id)
@@ -213,6 +212,12 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
     fun cancelJob() = graph.cancel()
 
     fun delete(id: String) {
+        if (isLiveRecording(id)) {
+            // the take in progress: throw it away through the session, which owns the file
+            graph.discardLive()
+            toast("Запись удалена")
+            return
+        }
         viewModelScope.launch {
             if (graph.job.value?.recordingId == id) {
                 graph.cancel()
@@ -279,46 +284,6 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
         }.getOrNull()
     }
 
-    // ------------------------------------------------------------ microphone
-
-    fun startMic() {
-        if (mic.isRecording) return
-        runCatching { mic.start() }
-            .onSuccess { _mic.value = MicState.Recording(mic.startedAt) }
-            .onFailure { _mic.value = MicState.Failed("Микрофон занят другим приложением или недоступен.") }
-    }
-
-    fun micLevel(): Float = mic.level()
-
-    fun stopMic() {
-        if (!mic.isRecording) return
-        _mic.value = MicState.Saving
-        viewModelScope.launch {
-            val file = withContext(Dispatchers.IO) { mic.stop() }
-            if (file == null) {
-                _mic.value = MicState.Failed("Запись слишком короткая. Говорите хотя бы пару секунд.")
-                return@launch
-            }
-            val title = "Запись с микрофона " + SimpleDateFormat("dd.MM HH:mm", Locale.ROOT).format(Date())
-            runCatching { store.adopt(file, title) }
-                .onSuccess { rec ->
-                    _mic.value = MicState.Idle
-                    graph.start(rec.id)
-                    navigate(Screen.Processing(rec.id))
-                }
-                .onFailure { _mic.value = MicState.Failed("Не удалось сохранить запись: на устройстве мало места?") }
-        }
-    }
-
-    fun discardMic() {
-        mic.discard()
-        _mic.value = MicState.Idle
-    }
-
-    fun resetMicError() {
-        if (_mic.value is MicState.Failed) _mic.value = MicState.Idle
-    }
-
     // ------------------------------------------------------------ live recording
 
     /** The live session for the live screen; null when there is none. */
@@ -331,10 +296,22 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
         return false
     }
 
-    /** Debug runs only (MainActivity checks the build is debuggable). */
+    /** Debug runs only (MainActivity checks the build is debuggable). Opens the live screen like a real take. */
     fun startLiveFromFile(file: File) {
-        graph.startLiveFromFile(file)?.let { toast(it) }
+        val error = graph.startLiveFromFile(file)
+        if (error != null) toast(error) else navigate(Screen.Live)
     }
+
+    /** The live screen is shown: preload the speech models so live text starts quickly. */
+    fun prepareLive() = graph.prepareLive()
+
+    /** The live screen left the composition: the preloaded models may be freed when idle. */
+    fun leaveLive() = graph.leaveLive()
+
+    val enginesReady: StateFlow<Boolean> = graph.enginesReady
+
+    /** True when [id] is the recording of the live session in progress (rows open the live screen for it). */
+    fun isLiveRecording(id: String): Boolean = graph.liveActive && graph.live.value?.recordingId == id
 
     fun pauseLive() = graph.pauseLive()
     fun resumeLive() = graph.resumeLive()
@@ -347,10 +324,6 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
     fun notificationPermissionNeeded(): Boolean =
         Build.VERSION.SDK_INT >= 33 &&
             getApplication<Application>().checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-
-    override fun onCleared() {
-        mic.discard()
-    }
 
     companion object {
         private const val KEY_SCREEN = "screen"

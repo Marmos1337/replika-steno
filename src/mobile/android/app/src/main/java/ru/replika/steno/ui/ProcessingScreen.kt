@@ -22,8 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import ru.replika.steno.ActiveJob
+import ru.replika.steno.core.LIVE_SOURCE
 import ru.replika.steno.core.RecordingState
 import ru.replika.steno.core.Stage
 import ru.replika.steno.ui.theme.Motion
@@ -72,6 +74,7 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
         when {
             loaded && rec == null -> vm.navigate(Screen.Library)
             rec?.state == RecordingState.READY -> vm.navigate(Screen.Transcript(id))
+            rec?.state == RecordingState.RECORDING && vm.isLiveRecording(id) -> vm.navigate(Screen.Live)
         }
     }
     if (rec == null) return
@@ -85,34 +88,52 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
     }
     val failure = failureKind(rec.error)
     val toLibrary = { vm.navigate(Screen.Library) }
-    val scroll = rememberScrollState()
+    val scroll = rememberLazyListState()
+    // the live text is only a draft: shown until the full pipeline's utterances exist, never exported
+    val draft = if (rec.utterances.isEmpty()) rec.liveDraft else emptyList()
 
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             TopBar(leading = { IconBtn(Ic.Back, "К записям", toLibrary) }, side = side, divider = scroll.canScrollBackward)
             // Fixed-size area between the top bar and the buttons; states cross-fade inside it.
-            Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(horizontal = side).padding(bottom = Space.xl)) {
-                Text(rec.title, style = Type.display, color = c.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(Space.s))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Ic.Shield, null, Modifier.size(Size.iconSmall), tint = c.muted)
-                    Spacer(Modifier.width(Space.s))
-                    Fade(view == View.FAILED, Modifier.weight(1f)) { failed ->
-                        Text(
-                            if (failed) "Всё обрабатывается на устройстве" else "Обработка идёт на устройстве, без интернета",
-                            style = Type.label, color = c.muted,
-                        )
+            // A lazy list, so a long live draft (thousands of lines) below the progress stays cheap.
+            LazyColumn(
+                Modifier.weight(1f).fillMaxWidth(),
+                state = scroll,
+                contentPadding = PaddingValues(start = side, end = side, bottom = Space.xl),
+            ) {
+                item(key = "head") {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(rec.title, style = Type.display, color = c.text, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(Space.s))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Ic.Shield, null, Modifier.size(Size.iconSmall), tint = c.muted)
+                            Spacer(Modifier.width(Space.s))
+                            Fade(view == View.FAILED, Modifier.weight(1f)) { failed ->
+                                Text(
+                                    if (failed) "Всё обрабатывается на устройстве" else "Обработка идёт на устройстве, без интернета",
+                                    style = Type.label, color = c.muted,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(Space.xl))
+                        Fade(view, Modifier.fillMaxWidth()) { v ->
+                            Column(Modifier.fillMaxWidth()) {
+                                when (v) {
+                                    View.FAILED -> FailedView(rec.error, failure)
+                                    View.QUEUED -> QueuedView(items.firstOrNull { it.id == other?.recordingId }?.title)
+                                    View.RUNNING -> RunningView(mine, started?.takeIf { it.first == id }?.second)
+                                }
+                            }
+                        }
                     }
                 }
-                Spacer(Modifier.height(Space.xl))
-                Fade(view, Modifier.fillMaxWidth()) { v ->
-                    Column(Modifier.fillMaxWidth()) {
-                        when (v) {
-                            View.FAILED -> FailedView(rec.error, failure)
-                            View.QUEUED -> QueuedView(items.firstOrNull { it.id == other?.recordingId }?.title)
-                            View.RUNNING -> RunningView(mine, started?.takeIf { it.first == id }?.second)
-                        }
+                if (draft.isNotEmpty()) {
+                    item(key = "draftTitle") { DraftTitle() }
+                    itemsIndexed(draft, key = { _, l -> "d${l.startMs}" }) { i, l ->
+                        val prev = draft.getOrNull(i - 1)
+                        LiveLineRow(l, showVoice = prev == null || prev.speaker != l.speaker, muted = true)
                     }
                 }
             }
@@ -126,8 +147,12 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
                             when (failure) {
                                 FailureKind.STOPPED -> PrimaryButton("Обработать снова", { vm.reprocess(id) }, Modifier.fillMaxWidth(), Ic.Refresh)
                                 FailureKind.OTHER -> PrimaryButton("Попробовать снова", { vm.reprocess(id) }, Modifier.fillMaxWidth(), Ic.Refresh)
-                                FailureKind.NO_SPEECH, FailureKind.CORRUPT ->
+                                // a live take has no file to swap: offer a new take instead
+                                FailureKind.NO_SPEECH, FailureKind.CORRUPT -> if (rec.sourceUri.startsWith(LIVE_SOURCE)) {
+                                    PrimaryButton("Новая живая запись", { vm.navigate(Screen.Live) }, Modifier.fillMaxWidth(), Ic.Mic)
+                                } else {
                                     PrimaryButton("Выбрать другой файл", { picker.launch(AUDIO_TYPES) }, Modifier.fillMaxWidth(), Ic.File)
+                                }
                             }
                             SecondaryButton("К записям", toLibrary, Modifier.fillMaxWidth())
                         }
@@ -135,6 +160,20 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DraftTitle() {
+    val c = Theme.colors
+    Column(Modifier.fillMaxWidth().padding(top = Space.xxl)) {
+        SectionTitle("Черновик живой записи")
+        Spacer(Modifier.height(Space.xs))
+        Text(
+            "Окончательный текст и участники появятся после обработки. В экспорт черновик не попадает.",
+            style = Type.label, color = c.muted,
+        )
+        Spacer(Modifier.height(Space.xs))
     }
 }
 

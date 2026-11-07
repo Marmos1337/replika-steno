@@ -85,6 +85,13 @@ class AppGraph(private val context: Context) {
     /** True while a live session is recording, paused or finishing. */
     val liveActive: Boolean get() = liveSession.value?.active == true
 
+    private val _enginesReady = MutableStateFlow(false)
+    /** The speech models are loaded and kept (live text can start at once). */
+    val enginesReady: StateFlow<Boolean> = _enginesReady.asStateFlow()
+
+    /** The live screen is open: keep the speech models loaded even with no session yet. */
+    @Volatile private var liveHold = false
+
     init {
         scope.launch { store.load() }
     }
@@ -117,6 +124,25 @@ class AppGraph(private val context: Context) {
         }
         scope.launch { session.start() }
         return null
+    }
+
+    /**
+     * The live screen opened: load the speech models now, so the first text comes ~1-2 s after the
+     * user starts talking instead of after the model load. They stay loaded until [leaveLive].
+     */
+    fun prepareLive() {
+        liveHold = true
+        if (_enginesReady.value) return
+        scope.launch {
+            runCatching { asrEngines {} }.onFailure { Log.w(TAG, "live: preload failed", it) }
+        }
+    }
+
+    /** The live screen closed: the models may be freed once nothing else uses them. */
+    fun leaveLive() {
+        if (!liveHold) return
+        liveHold = false
+        if (running?.isActive != true && !liveActive) releaseWhenIdle()
     }
 
     fun pauseLive() { liveSession.value?.pause() }
@@ -273,9 +299,10 @@ class AppGraph(private val context: Context) {
             engineLock.withLock { llm?.close(); llm = null }
             delay(IDLE_RELEASE_MS)
             engineLock.withLock {
-                if (running?.isActive == true || liveActive) return@withLock
+                if (running?.isActive == true || liveActive || liveHold) return@withLock
                 recognizer?.release(); recognizer = null
                 diarizer?.release(); diarizer = null
+                _enginesReady.value = false
                 Log.i(TAG, "engines released")
             }
         }
@@ -286,6 +313,7 @@ class AppGraph(private val context: Context) {
             withContext(Dispatchers.IO) {
                 val r = recognizer ?: run { note("Загрузка модели распознавания"); SherpaRecognizer(context.assets) }.also { recognizer = it }
                 val d = diarizer ?: run { note("Загрузка модели голосов"); VadDiarizer(context.assets) }.also { diarizer = it }
+                _enginesReady.value = true
                 r to d
             }
         }

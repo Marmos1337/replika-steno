@@ -79,6 +79,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import java.util.Locale
+import androidx.compose.ui.text.style.TextAlign
+import ru.replika.steno.core.live.LiveMetrics
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import ru.replika.steno.core.ActionItem
@@ -126,6 +128,7 @@ private sealed interface Dlg {
     data class Confidence(val index: Int) : Dlg
     data class Problems(val list: List<String>) : Dlg
     data object Rerun : Dlg
+    data object LiveInfo : Dlg
 }
 
 @Composable
@@ -290,13 +293,14 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
                                 IconBtn(Ic.More, "Ещё действия", { menu = true })
                                 AppMenu(
                                     menu, { menu = false },
-                                    listOf(
+                                    listOfNotNull(
                                         MenuEntry("Сохранить JSON", Ic.Download, onClick = { export(ExportFormat.JSON) }),
                                         MenuEntry("Сохранить TXT", Ic.Download, onClick = { export(ExportFormat.TXT) }),
                                         MenuEntry("Поделиться JSON", Ic.Share, onClick = { share(ExportFormat.JSON) }),
                                         MenuEntry("Поделиться TXT", Ic.Share, onClick = { share(ExportFormat.TXT) }),
                                         MenuEntry("Скопировать текст", Ic.Copy, onClick = ::copyAll),
                                         MenuEntry("Обработать заново", Ic.Refresh, onClick = { dlg = Dlg.Rerun }),
+                                        rec.liveMetrics?.let { MenuEntry("Замеры живой записи", Ic.Info, onClick = { dlg = Dlg.LiveInfo }) },
                                     ),
                                 )
                             }
@@ -415,6 +419,9 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
             Text("Файл не прошёл проверку формата. Обработайте запись заново.", style = Type.body, color = c.text)
             Spacer(Modifier.height(Space.m))
             d.list.take(20).forEach { Text(it, style = Type.labelNum, color = c.muted) }
+        }
+        Dlg.LiveInfo -> rec.liveMetrics?.let { m ->
+            AppDialog("Живая запись", { dlg = null }, buttons = { TextAction("Закрыть", { dlg = null }) }) { LiveMetricsBody(m) }
         }
         Dlg.Rerun -> ConfirmDialog(
             title = "Обработать заново?",
@@ -856,4 +863,34 @@ private fun RenameDialog(speakerId: String, current: String, onSave: (String) ->
 private fun copy(context: Context, label: String, text: String) {
     val cm = context.getSystemService(ClipboardManager::class.java) ?: return
     cm.setPrimaryClip(ClipData.newPlainText(label, text))
+}
+
+/** Numbers measured on this phone during the live take; a missing measurement says so instead of a guess. */
+@Composable
+private fun LiveMetricsBody(m: LiveMetrics) {
+    val c = Theme.colors
+    val ru = Locale.forLanguageTag("ru")
+    fun sec(ms: Long) = String.format(ru, "%.1f с", ms / 1000f)
+    val rows = buildList {
+        add("Записано" to fmtTime(m.audioMs))
+        add("Первый текст" to (m.timeToFirstTextMs?.let { "через ${sec(it)}" } ?: "нет замера"))
+        add(
+            "Задержка обновления" to
+                if (m.latencyMedianMs != null && m.latencyP95Ms != null) "медиана ${m.latencyMedianMs} мс · p95 ${m.latencyP95Ms} мс" else "нет замера",
+        )
+        add("Скорость распознавания" to (m.speedX?.let { String.format(ru, "×%.1f к реальному времени", it) } ?: "нет замера"))
+        add("Наибольшее отставание" to sec(m.maxBacklogMs))
+        add("Пик памяти" to (m.peakPssMb?.let { "$it МБ" } ?: "нет замера"))
+        if (m.droppedAudioMs > 0) add("Пропущено живым текстом" to "${sec(m.droppedAudioMs)} (в расшифровке есть)")
+    }
+    rows.forEachIndexed { i, (label, value) ->
+        if (i > 0) { Spacer(Modifier.height(Space.s)); Hairline(); Spacer(Modifier.height(Space.s)) }
+        Row(verticalAlignment = Alignment.Top) {
+            Text(label, style = Type.label, color = c.muted, modifier = Modifier.weight(0.8f))
+            Spacer(Modifier.width(Space.m))
+            Text(value, style = Type.labelNum, color = c.text, textAlign = TextAlign.End, modifier = Modifier.weight(1.4f))
+        }
+    }
+    Spacer(Modifier.height(Space.l))
+    Text("Замерено на этом телефоне во время записи. В экспорт не попадает.", style = Type.label, color = c.muted)
 }

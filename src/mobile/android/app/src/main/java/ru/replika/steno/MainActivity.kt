@@ -41,11 +41,12 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(dark) { applyWindow(dark) }
             ReplikaTheme(dark) { AppShell(vm) }
         }
-        if (savedInstanceState == null) { handleLiveTest(intent); handleShare(intent) }
+        if (savedInstanceState == null) { handleOpenLive(intent); handleLiveTest(intent); handleShare(intent) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        handleOpenLive(intent)
         handleLiveTest(intent)
         handleShare(intent)
     }
@@ -63,8 +64,16 @@ class MainActivity : ComponentActivity() {
         vm.startLiveFromFile(file)
     }
 
+    /** The recording notification was tapped: show the live screen. */
+    private fun handleOpenLive(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_LIVE, false) != true) return
+        intent.removeExtra(EXTRA_OPEN_LIVE)
+        vm.navigate(ru.replika.steno.ui.Screen.Live)
+    }
+
     companion object {
         const val EXTRA_LIVE_TEST = "live_test_file"
+        const val EXTRA_OPEN_LIVE = "open_live"
     }
 
     private fun systemDark(): Boolean =

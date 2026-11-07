@@ -7,6 +7,13 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.statusBarsPadding
+import ru.replika.steno.core.live.LiveState
+import ru.replika.steno.core.live.LiveStatus
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -90,7 +97,15 @@ fun AppShell(vm: ReplikaViewModel) {
             scope.launch { drawer.close() }
         }
         val content = @Composable {
-            ScreenHost(vm, screen, wide, onMenu = { scope.launch { drawer.open() } })
+            Column(Modifier.fillMaxSize()) {
+                val live by vm.live.collectAsState()
+                val strip = live?.takeIf { screen != Screen.Live && it.status != LiveStatus.DONE }
+                LiveStrip(strip) { vm.navigate(Screen.Live) }
+                // the strip already covers the status bar; the screens below must not pad for it again
+                Box(Modifier.weight(1f).fillMaxWidth().then(if (strip != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier)) {
+                    ScreenHost(vm, screen, wide, onMenu = { scope.launch { drawer.open() } })
+                }
+            }
         }
         if (wide) {
             Row(Modifier.fillMaxSize()) {
@@ -130,8 +145,51 @@ private fun ScreenHost(vm: ReplikaViewModel, screen: Screen, wide: Boolean, onMe
         when (val s = Screen.decode(key)) {
             Screen.Library -> LibraryScreen(vm, wide, onMenu)
             Screen.About -> AboutScreen(vm, wide, onMenu)
+            Screen.Live -> LiveScreen(vm)
             is Screen.Processing -> ProcessingScreen(vm, s.id)
             is Screen.Transcript -> TranscriptScreen(vm, s.id)
+        }
+    }
+}
+
+/**
+ * «Идёт запись · 03:12» across the top of every other screen while a live take is going: leaving the
+ * live screen never stops the recording, and one tap brings it back. Slides in and out with the take.
+ */
+@Composable
+private fun LiveStrip(state: LiveState?, onOpen: () -> Unit) {
+    val c = Theme.colors
+    var last by remember { mutableStateOf(state) }
+    if (state != null) last = state
+    AnimatedVisibility(
+        visible = state != null,
+        enter = expandVertically(Motion.move(Theme.reducedMotion)) + fadeIn(Motion.spec(Theme.reducedMotion)),
+        exit = shrinkVertically(Motion.move(Theme.reducedMotion)) + fadeOut(Motion.spec(Theme.reducedMotion, Motion.FAST)),
+    ) {
+        val s = last ?: return@AnimatedVisibility
+        val (text, action) = when (s.status) {
+            LiveStatus.STARTING -> "Включаю микрофон…" to "Открыть"
+            LiveStatus.RECORDING -> "Идёт запись · ${fmtTime(s.elapsedMs)}" to "Открыть"
+            LiveStatus.PAUSED -> "Запись на паузе · ${fmtTime(s.elapsedMs)}" to "Открыть"
+            LiveStatus.FINISHING -> "Завершаю запись…" to "Открыть"
+            LiveStatus.ERROR -> "Запись остановилась" to "Подробнее"
+            LiveStatus.DONE -> "Запись сохранена" to "Открыть"
+        }
+        Column(Modifier.fillMaxWidth().background(c.nav)) {
+            Row(
+                Modifier.fillMaxWidth().statusBarsPadding().height(Size.touch)
+                    .clickable(role = Role.Button, onClickLabel = "Открыть живую запись", onClick = onOpen)
+                    .padding(horizontal = Space.l),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RecDot(s.status, Space.s + Space.xs / 2)
+                Spacer(Modifier.width(Space.s))
+                Text(text, style = Type.labelNum, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(Space.s))
+                Text(action, style = Type.label, color = c.muted, maxLines = 1)
+                Icon(Ic.Right, null, Modifier.size(Size.iconSmall), tint = c.muted)
+            }
+            Box(Modifier.fillMaxWidth().height(Size.stroke).background(c.border))
         }
     }
 }

@@ -139,6 +139,12 @@ fun AboutScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                     "Расшифровывает запись встречи по говорящим и собирает итоги. Полностью на телефоне.",
                     style = Type.body, color = c.text,
                 )
+                Spacer(Modifier.height(Space.s))
+                Text(
+                    "Живая запись показывает текст прямо во время разговора — тоже на телефоне и теми же моделями. " +
+                        "После остановки запись проходит полную обработку: участники, окончательный текст и итоги.",
+                    style = Type.body, color = c.muted,
+                )
 
                 Block("Как это работает") {
                     AppCard(Modifier.fillMaxWidth()) {
