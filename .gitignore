@@ -17,3 +17,4 @@ captures/
 src/mobile/android/app/libs/*.aar
 testdata/parts/
 .kotlin/
+/dist/
