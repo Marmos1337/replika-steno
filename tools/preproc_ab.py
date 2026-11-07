@@ -57,12 +57,12 @@ def denoiser(model):
     return lambda x: np.asarray(d(x, SR).samples, dtype=np.float32)
 
 
-def run(x, ref):
+def run(x, ref, env=None):
     with tempfile.TemporaryDirectory() as tmp:
         wav, out = f"{tmp}/a.wav", f"{tmp}/h.json"
         pcm = (np.clip(x, -1, 1) * 32767).astype("<i2").tobytes()
         subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "s16le", "-ar", str(SR), "-ac", "1", "-i", "-", wav], input=pcm, check=True)
-        subprocess.run([sys.executable, str(ROOT / "tools/mac_check.py"), wav, "--out", out], check=True, capture_output=True)
+        subprocess.run([sys.executable, str(ROOT / "tools/mac_check.py"), wav, "--out", out], check=True, capture_output=True, env={**os.environ, **(env or {})})
         r = json.loads(subprocess.check_output([sys.executable, str(ROOT / "tools/eval.py"), out, str(T / ref)]))
         return r["WER"], r["speaker_time_accuracy"], r["speakers_hyp"]
 
@@ -70,17 +70,19 @@ def run(x, ref):
 def main():
     dn = denoiser(sys.argv[1])
     babble = load(BABBLE)
-    methods = {"none": lambda x: x, "hpf+norm": hpf_norm, "gtcrn": dn, "hpf+norm+gtcrn": lambda x: dn(hpf_norm(x))}
+    methods = {"none": lambda x: x, "hpf+norm": hpf_norm, "gtcrn": dn, "hpf+norm+gtcrn": lambda x: dn(hpf_norm(x)), "diar-norm": "1", "diar-quiet-gain": "auto"}
+    only = os.environ.get("ONLY")
+    if only: methods = {k: v for k, v in methods.items() if k in only.split(",")}
     rows = []
     for audio, ref in CASES:
         clean = load(T / audio)
         variants = {"clean": clean, "snr10": add_noise(clean, 10, babble), "snr5": add_noise(clean, 5, babble), "quiet-24dB": clean * 10 ** (-24 / 20)}
         for vname, x in variants.items():
             for mname, f in methods.items():
-                w, acc, n = run(f(x), ref)
+                w, acc, n = run(x, ref, {"DIAR_NORM": f}) if isinstance(f, str) else run(f(x), ref)
                 rows.append((audio.split("_")[0], vname, mname, w, acc, n))
                 print(f"{audio.split('_')[0]:3} {vname:11} {mname:15} WER {w*100:5.1f}%  spk {acc*100:5.1f}%  n={n}", flush=True)
-    json.dump(rows, open(ROOT / "artifacts/test-results/preproc_ab.json", "w"), indent=1)
+    json.dump(rows, open(ROOT / f"artifacts/test-results/preproc_ab{os.environ.get('TAG', '')}.json", "w"), indent=1)
 
 
 main()

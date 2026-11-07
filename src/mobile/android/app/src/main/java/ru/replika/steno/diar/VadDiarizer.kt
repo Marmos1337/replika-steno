@@ -10,6 +10,7 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.ensureActive
 import ru.replika.steno.asr.ModelAssets
 import ru.replika.steno.core.Diarizer
+import ru.replika.steno.core.Loudness
 import ru.replika.steno.core.SpeakerTurn
 
 /**
@@ -41,7 +42,9 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
 
     override suspend fun diarize(samples: FloatArray, sampleRate: Int, onProgress: (Float) -> Unit): List<SpeakerTurn> {
         val ctx = coroutineContext
-        val phrases = synchronized(this) { detectSpeech(samples) { ctx.ensureActive() } }
+        // quiet recordings are lifted for speech detection and voice prints only (see Loudness)
+        val gain = Loudness.quietGain(samples)
+        val phrases = synchronized(this) { detectSpeech(samples, gain) { ctx.ensureActive() } }
         onProgress(0.15f)
         if (phrases.isEmpty()) return emptyList()
 
@@ -50,7 +53,7 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
             coroutineContext.ensureActive()
             val stream = extractor.createStream()
             try {
-                stream.acceptWaveform(samples.copyOfRange(a, b), sampleRate)
+                stream.acceptWaveform(Loudness.slice(samples, a, b, gain), sampleRate)
                 stream.inputFinished()
                 embeddings += synchronized(this) { extractor.compute(stream) }
             } finally {
@@ -67,7 +70,7 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
     }
 
     /** Returns [start, end) sample ranges of speech. */
-    private fun detectSpeech(samples: FloatArray, checkCancel: () -> Unit): List<Pair<Int, Int>> {
+    private fun detectSpeech(samples: FloatArray, gain: Float, checkCancel: () -> Unit): List<Pair<Int, Int>> {
         vad.reset()
         val out = ArrayList<Pair<Int, Int>>()
         fun drain() {
@@ -82,7 +85,7 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
         while (i < samples.size) {
             if (++n % 1000 == 0) checkCancel()
             val end = minOf(i + WINDOW, samples.size)
-            vad.acceptWaveform(samples.copyOfRange(i, end))
+            vad.acceptWaveform(Loudness.slice(samples, i, end, gain))
             drain()
             i = end
         }

@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import ru.replika.steno.core.Loudness
 import ru.replika.steno.core.Segments
 import ru.replika.steno.core.SpeakerTurn
 import ru.replika.steno.core.TextGuard
@@ -59,6 +60,17 @@ class CoreTest {
         assertEquals(55_000L, parts.last().endMs)
         for (p in parts) assertTrue(p.endMs - p.startMs in 1..20_000)
         for (i in 1 until parts.size) assertEquals(parts[i - 1].endMs, parts[i].startMs)
+    }
+
+    @Test fun quietGainOnlyForQuietRecordings() {
+        val sine = { amp: Float -> FloatArray(16_000) { (amp * kotlin.math.sin(it * 0.1)).toFloat() } }
+        assertEquals(1f, Loudness.quietGain(sine(0.3f)), 0f) // ~ -13 dBFS: untouched
+        val quiet = sine(0.02f) // ~ -37 dBFS
+        val g = Loudness.quietGain(quiet)
+        assertTrue(g > 5f && g < 32f)
+        assertEquals(-20f, Loudness.loudLevelDb(Loudness.slice(quiet, 0, quiet.size, g)), 0.5f)
+        val silent = Loudness.quietGain(FloatArray(16_000)) // silence: capped at +30 dB, never NaN/inf
+        assertEquals(31.62f, silent, 0.01f)
     }
 
     @Test fun guardRejectsInventedWords() {

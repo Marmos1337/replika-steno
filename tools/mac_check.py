@@ -38,6 +38,32 @@ def vad_phrases(x):
         res.append((max(0, a - min(pad, max(0, a - prev_end) // 2)), min(len(x), b + min(pad, max(0, next_start - b) // 2))))
     return res
 
+def diar_norm(x):
+    """1st-order high-pass at 80 Hz + gain so the loudest 10 % of 30 ms frames sit at -20 dBFS RMS, peak-limited."""
+    a = np.exp(-2 * np.pi * 80 / SR)
+    from itertools import accumulate
+    y = np.empty_like(x); px = py = 0.0
+    for i, v in enumerate(x):
+        py = a * (py + v - px); px = v; y[i] = py
+    n = 480; frames = y[: len(y) // n * n].reshape(-1, n)
+    if len(frames) == 0: return y
+    rms = np.sqrt(np.mean(frames ** 2, axis=1))
+    ref = np.mean(np.sort(rms)[-max(1, len(rms) // 10):]) + 1e-9
+    y = y * min(10 ** (-20 / 20) / ref, 100.0)
+    peak = np.max(np.abs(y))
+    return (y * (0.95 / peak) if peak > 0.95 else y).astype(np.float32)
+
+def quiet_gain(x, quiet_db=-28.0, target_db=-20.0, max_gain_db=30.0):
+    """Mirror of VadDiarizer.quietGain: only a quiet recording (loudest 10 % of 30 ms frames below
+    quiet_db) is raised towards target_db, for speech detection and voice embeddings only."""
+    n = 480; frames = x[: len(x) // n * n].reshape(-1, n)
+    if len(frames) == 0: return x
+    rms = np.sqrt(np.mean(frames.astype(np.float64) ** 2, axis=1))
+    ref_db = 20 * np.log10(np.mean(np.sort(rms)[-max(1, len(rms) // 10):]) + 1e-9)
+    if ref_db >= quiet_db: return x
+    g = 10 ** (min(target_db - ref_db, max_gain_db) / 20)
+    return np.clip(x * g, -1, 1).astype(np.float32)
+
 def cluster(E, thr):
     E = E / np.linalg.norm(E, axis=1, keepdims=True)
     n = len(E); D = 1 - E @ E.T; size = np.ones(n); alive = np.ones(n, bool); owner = np.arange(n)
@@ -72,11 +98,15 @@ def main():
     path = sys.argv[1]; thr = float(sys.argv[2]) if len(sys.argv) > 2 and not sys.argv[2].startswith("--") else 0.6
     x = load(path); dur = len(x) * 1000 // SR
     t0 = time.time()
-    ph = vad_phrases(x)
+    # DIAR_NORM=1: speech detection and voice embeddings see a high-passed, loudness-normalised copy;
+    # the recognizer keeps the original audio (mirrors DiarAudio in the app)
+    mode = __import__("os").environ.get("DIAR_NORM")
+    xd = diar_norm(x) if mode == "1" else quiet_gain(x) if mode == "auto" else x
+    ph = vad_phrases(xd)
     ext = sherpa_onnx.SpeakerEmbeddingExtractor(sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=f"{M}/diar/titanet_small.onnx", num_threads=4))
     E = []
     for a, b in ph:
-        st = ext.create_stream(); st.accept_waveform(SR, x[a:b]); st.input_finished(); E.append(np.array(ext.compute(st)))
+        st = ext.create_stream(); st.accept_waveform(SR, xd[a:b]); st.input_finished(); E.append(np.array(ext.compute(st)))
     turns = []
     if ph:
         lab, conf = cluster(np.array(E), thr)
