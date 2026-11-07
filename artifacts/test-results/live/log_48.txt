@@ -1,0 +1,4 @@
+11-07 19:24:08.602 14388 14429 I Replika : live: models ready in 2978 ms
+11-07 19:24:55.920 14388 14423 I Replika : LIVE_METRICS {"audioMs":47703,"timeToFirstTextMs":617,"latencyMedianMs":240,"latencyP95Ms":858,"latencyCount":57,"decodeRtf":0.09186673909425735,"speedX":2.6347970962524414,"maxBacklogMs":2200,"maxQueueChunks":9,"peakPssMb":499,"partials":48,"finals":9,"skippedPartials":0,"droppedAudioMs":0}
+11-07 19:24:55.927 14388 14429 I Replika : models ready in 3 ms
+11-07 19:24:59.583 14388 14429 I Replika : transcript 2a948f9a-9777-4f79-89a6-afdf528fc055: ProcessingMetrics(audioDurationMs=47703, decodeMs=218, diarizationMs=958, asrMs=2468, llmMs=0)
