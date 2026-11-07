@@ -911,7 +911,7 @@ private fun RecognizeDialog(u: Utterance, onRun: (RecognizeMode, Boolean) -> Uni
         Spacer(Modifier.height(Space.xs))
         Hairline()
         Spacer(Modifier.height(Space.xs))
-        ChoiceRow("Захватить соседнее", "До 1 с тишины до и после — если слова обрезаны", selected = widen, radio = false) { widen = !widen }
+        ChoiceRow("Захватить соседнее", "До 1 с звука до и после — если слова обрезаны", selected = widen, radio = false) { widen = !widen }
     }
 }
 
