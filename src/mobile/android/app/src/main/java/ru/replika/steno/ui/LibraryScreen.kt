@@ -2,6 +2,7 @@ package ru.replika.steno.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,7 +14,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -21,9 +21,6 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,7 +35,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +43,7 @@ import kotlinx.coroutines.withContext
 import ru.replika.steno.ActiveJob
 import ru.replika.steno.core.Recording
 import ru.replika.steno.core.RecordingState
+import ru.replika.steno.ui.theme.Motion
 import ru.replika.steno.ui.theme.Size
 import ru.replika.steno.ui.theme.Space
 import ru.replika.steno.ui.theme.Theme
@@ -78,9 +76,6 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
     }
 
     val listState = rememberLazyListState()
-    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    // Height the bottom action bar covers: fade + button + bottom padding + system navigation bar.
-    val barHeight = Size.fade + Size.touch + Space.l + navBottom
 
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
@@ -88,7 +83,6 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
             TopBar(
                 leading = if (wide) null else ({ IconBtn(Ic.Menu, "Открыть меню", onMenu) }),
                 side = side,
-                divider = items.isNotEmpty() && filtered.isNotEmpty() && listState.canScrollBackward,
             )
             Column(Modifier.padding(horizontal = side)) {
                 Row(verticalAlignment = Alignment.Bottom) {
@@ -109,7 +103,7 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                     !loaded -> Unit
                     // Only the mark, a title and one line; the actions live in the bottom bar, as with a list.
                     // centred in the space above the bar; scrolls only if the screen is too short
-                    items.isEmpty() -> Box(Modifier.fillMaxSize().padding(bottom = barHeight), contentAlignment = Alignment.Center) {
+                    items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
                             EmptyState(
                                 title = "Пока нет записей",
@@ -118,7 +112,7 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                         }
                     }
                     filtered.isEmpty() -> Column(
-                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = barHeight),
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         EmptyState("Ничего не нашлось", "Нет записей, где встречается «${query.trim()}».", icon = Ic.Search) {
@@ -128,8 +122,8 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                     else -> LazyColumn(
                         Modifier.fillMaxSize(),
                         state = listState,
-                        // the last card scrolls fully above the bar
-                        contentPadding = PaddingValues(start = side, end = side, bottom = barHeight + Space.s),
+                        // the list ends at the bar's top edge; the last card keeps the standard gap above it
+                        contentPadding = PaddingValues(start = side, end = side, bottom = Space.l),
                         verticalArrangement = Arrangement.spacedBy(Space.s),
                     ) {
                         items(filtered, key = { it.id }) { r ->
@@ -151,33 +145,35 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                         }
                     }
                 }
+                // the title and search stay put; the hairline marks where cards scroll beneath them
+                val line by animateFloatAsState(
+                    if (loaded && filtered.isNotEmpty() && listState.canScrollBackward) 1f else 0f,
+                    Motion.spec(Theme.reducedMotion, Motion.FAST), label = "listDivider",
+                )
+                Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(Size.stroke).alpha(line).background(c.border))
             }
-        }
 
-        // Bottom action bar: the same place in the empty state and with a list. A 24dp fade on top,
-        // then a solid strip of the page color, so cards slide under it without a seam.
-        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-            Box(Modifier.fillMaxWidth().height(Size.fade).background(Brush.verticalGradient(listOf(c.bg.copy(alpha = 0f), c.bg))))
-            BoxWithConstraints(
-                Modifier.fillMaxWidth().background(c.bg).navigationBarsPadding()
-                    .padding(start = side, end = side, bottom = Space.l),
-            ) {
-                // Live recording leads (it records, keeps the audio and then processes it like an import).
-                // On a phone the import keeps a short label so both fit on one row without clipping.
-                val roomy = maxWidth >= 440.dp
-                val withIcon = maxWidth >= 340.dp
-                Row(horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
-                    PrimaryButton("Живая запись", { vm.navigate(Screen.Live) }, Modifier.weight(1f), Ic.Mic)
-                    SecondaryButton(
-                        when {
-                            importing -> if (roomy) "Копирую файл…" else "Копирую…"
-                            roomy -> "Импортировать аудио"
-                            else -> "Импорт"
-                        },
-                        pick,
-                        icon = if (withIcon) Ic.File else null,
-                        enabled = !importing,
-                    )
+            // Bottom action bar: the same place in the empty state and with a list. The list ends at its
+            // top edge (nothing slides under it); a hairline shows while there are more cards below.
+            BottomBar(side = side, divider = loaded && filtered.isNotEmpty() && listState.canScrollForward) {
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    // Live recording leads (it records, keeps the audio and then processes it like an import).
+                    // On a phone the import keeps a short label so both fit on one row without clipping.
+                    val roomy = maxWidth >= 440.dp
+                    val withIcon = maxWidth >= 340.dp
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
+                        PrimaryButton("Живая запись", { vm.navigate(Screen.Live) }, Modifier.weight(1f), Ic.Mic)
+                        SecondaryButton(
+                            when {
+                                importing -> if (roomy) "Копирую файл…" else "Копирую…"
+                                roomy -> "Импортировать аудио"
+                                else -> "Импорт"
+                            },
+                            pick,
+                            icon = if (withIcon) Ic.File else null,
+                            enabled = !importing,
+                        )
+                    }
                 }
             }
         }

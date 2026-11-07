@@ -21,10 +21,7 @@ import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -367,10 +364,10 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
                         SummaryList(rec, summaryState, side, header, tabs, vm, onJump = ::reveal)
                     }
                 }
-                FollowPill(
-                    visible = tab == 0 && player.playing && !follow && current >= 0,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                ) {
+            }
+            // «К текущей реплике» sits in its own row above the player, never over the text
+            Column(Modifier.fillMaxWidth().background(c.bg), horizontalAlignment = Alignment.CenterHorizontally) {
+                FloatingPill(tab == 0 && player.playing && !follow && current >= 0, "К текущей реплике", topGap = true) {
                     follow = true
                     scope.launch { listState.ensureVisible(current + HEAD_ITEMS) }
                 }
@@ -431,15 +428,6 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
         )
         null -> Unit
     }
-}
-
-@Composable
-private fun FollowPill(visible: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(Motion.spec(Theme.reducedMotion)), exit = fadeOut(Motion.spec(Theme.reducedMotion, Motion.FAST)),
-        modifier = modifier.padding(bottom = Space.l),
-    ) { PrimaryButton("К текущей реплике", onClick, icon = Ic.Down) }
 }
 
 /** Scrolls so that [index] is fully visible below the sticky tabs; does nothing if it already is. */
@@ -689,7 +677,8 @@ private fun SummaryList(
 
 @Composable
 private fun SummaryTitle(text: String, side: Dp) {
-    SectionTitle(text, Modifier.padding(start = side, end = side, top = Space.l, bottom = Space.m))
+    // the gap above a section is larger than below its title, so each title reads as part of its own card
+    SectionTitle(text, Modifier.padding(start = side, end = side, top = Space.xl, bottom = Space.m))
 }
 
 /** Time chips of the cited utterances; each one opens the transcript there. */

@@ -1,6 +1,9 @@
 package ru.replika.steno.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
@@ -28,6 +31,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -47,7 +51,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size as GSize
@@ -250,6 +256,52 @@ fun AppCard(
 fun Modifier.combinedClickableCompat(onClick: () -> Unit, onLongClick: (() -> Unit)?): Modifier =
     this.then(Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick))
 
+/**
+ * Fixed action bar at the bottom of a screen. It is a sibling of the scrolling content, never drawn
+ * over it: the content ends at its top edge, on an opaque strip of the page color. A hairline shows
+ * while there is more content below ([divider]), like the one under the top bar.
+ * [top] is an optional slot above the buttons (a «к новым репликам» pill); it keeps a [Space.m] gap.
+ */
+@Composable
+fun BottomBar(
+    side: Dp,
+    divider: Boolean,
+    modifier: Modifier = Modifier,
+    top: @Composable ColumnScope.() -> Unit = {},
+    content: @Composable () -> Unit,
+) {
+    val c = Theme.colors
+    val line by animateFloatAsState(if (divider) 1f else 0f, Motion.spec(Theme.reducedMotion, Motion.FAST), label = "bottomDivider")
+    Column(modifier.fillMaxWidth().background(c.bg)) {
+        Box(Modifier.fillMaxWidth().height(Size.stroke).alpha(line).background(c.border))
+        Column(
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(start = side, end = side, top = Space.m, bottom = Space.l),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            top()
+            content()
+        }
+    }
+}
+
+/**
+ * Raised pill that brings the reader back to the newest or current text. It takes its own row above
+ * the bottom bar (a [BottomBar] top slot, or a row of its own with [topGap]), so it never covers text.
+ */
+@Composable
+fun ColumnScope.FloatingPill(visible: Boolean, text: String, topGap: Boolean = false, onClick: () -> Unit) {
+    val reduced = Theme.reducedMotion
+    AnimatedVisibility(
+        visible = visible,
+        enter = expandVertically(Motion.move(reduced)) + fadeIn(Motion.spec(reduced)),
+        exit = shrinkVertically(Motion.move(reduced)) + fadeOut(Motion.spec(reduced, Motion.FAST)),
+    ) {
+        Box(Modifier.padding(top = if (topGap) Space.m else 0.dp, bottom = Space.m)) {
+            PrimaryButton(text, onClick, Modifier.shadow(Space.s, Radius.pill), icon = Ic.Down)
+        }
+    }
+}
+
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     Text(text, style = Type.heading, color = Theme.colors.text, modifier = modifier)
@@ -322,7 +374,8 @@ fun <T> Segmented(
                 val sel = o == selected
                 Row(
                     Modifier.weight(1f).fillMaxHeight().clip(Radius.pill)
-                        .clickable(role = Role.Tab, onClickLabel = label(o)) { onSelect(o) },
+                        .clickable(role = Role.Tab, onClickLabel = label(o)) { onSelect(o) }
+                        .padding(horizontal = Space.s),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

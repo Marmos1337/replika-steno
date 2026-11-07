@@ -151,7 +151,8 @@ fun AboutScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                         STEPS.forEachIndexed { i, (title, text) ->
                             if (i > 0) Spacer(Modifier.height(Space.l))
                             Row {
-                                Text("${i + 1}", style = Type.heading, color = c.muted, modifier = Modifier.width(Space.xl))
+                                // same style as the step title, so the number sits on the title's baseline
+                                Text("${i + 1}", style = Type.bodyStrong.copy(fontFeatureSettings = "tnum"), color = c.muted, modifier = Modifier.width(Space.xl))
                                 Spacer(Modifier.width(Space.s))
                                 Column(Modifier.weight(1f)) {
                                     Text(title, style = Type.bodyStrong, color = c.text)

@@ -3,6 +3,7 @@ package ru.replika.steno.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
@@ -11,7 +12,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import ru.replika.steno.core.live.LiveState
 import ru.replika.steno.core.live.LiveStatus
 import androidx.compose.foundation.background
@@ -100,9 +101,12 @@ fun AppShell(vm: ReplikaViewModel) {
             Column(Modifier.fillMaxSize()) {
                 val live by vm.live.collectAsState()
                 val strip = live?.takeIf { screen != Screen.Live && it.status != LiveStatus.DONE }
+                // The shell owns the status bar area, so only the strip's own row slides in and out and
+                // the screen below moves with it smoothly; screens never pad for the status bar again.
+                val top by animateColorAsState(if (strip != null) c.nav else c.bg, Motion.spec(Theme.reducedMotion), label = "statusArea")
+                Box(Modifier.fillMaxWidth().background(top).windowInsetsTopHeight(WindowInsets.statusBars))
                 LiveStrip(strip) { vm.navigate(Screen.Live) }
-                // the strip already covers the status bar; the screens below must not pad for it again
-                Box(Modifier.weight(1f).fillMaxWidth().then(if (strip != null) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier)) {
+                Box(Modifier.weight(1f).fillMaxWidth().consumeWindowInsets(WindowInsets.statusBars)) {
                     ScreenHost(vm, screen, wide, onMenu = { scope.launch { drawer.open() } })
                 }
             }
@@ -177,7 +181,7 @@ private fun LiveStrip(state: LiveState?, onOpen: () -> Unit) {
         }
         Column(Modifier.fillMaxWidth().background(c.nav)) {
             Row(
-                Modifier.fillMaxWidth().statusBarsPadding().height(Size.touch)
+                Modifier.fillMaxWidth().height(Size.touch)
                     .clickable(role = Role.Button, onClickLabel = "Открыть живую запись", onClick = onOpen)
                     .padding(horizontal = Space.l),
                 verticalAlignment = Alignment.CenterVertically,
@@ -256,7 +260,7 @@ private fun DrawerPanel(
                 selected = theme,
                 onSelect = onTheme,
                 label = ::themeLabel,
-                icon = ::themeIcon,
+                // labels only: three icons + labels do not fit the 280dp panel without touching
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(Space.m))

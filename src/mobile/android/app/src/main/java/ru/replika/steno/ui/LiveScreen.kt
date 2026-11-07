@@ -12,15 +12,12 @@ import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -39,7 +36,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -47,7 +43,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.InlineTextContent
@@ -58,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -70,29 +67,31 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size as GSize
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -120,9 +119,6 @@ private enum class Perm { GRANTED, ASK, DENIED, DENIED_FOREVER }
 /** What the screen shows; header and action bar keep their size in every phase. */
 private enum class Phase { IDLE, PERMISSION, LIVE, ERROR }
 
-/** A new speaker header after this much silence even when the voice is the same. */
-private const val TURN_GAP_MS = 20_000L
-
 /** Level history kept for the meter; the meter draws as many of the newest values as fit. */
 private const val LEVEL_HISTORY = 96
 private const val LEVEL_TICK_MS = 80L
@@ -130,6 +126,9 @@ private const val LEVEL_TICK_MS = 80L
 /** The info line under the header always reserves two lines of text, so the list never moves when it changes. */
 private val INFO_MIN = Type.label.lineHeight.value.dp * 2 + Space.m * 2
 private val METER_HEIGHT = 40.dp
+
+/** Empty states sit a little above the geometric centre of the free space: it reads as centred. */
+private val OPTICAL_CENTER = BiasAlignment(0f, -0.2f)
 
 private const val UI_PREFS = "ui"
 private const val ASKED_NOTIFICATIONS = "asked_notifications"
@@ -216,51 +215,72 @@ fun LiveScreen(vm: ReplikaViewModel) {
         else -> Phase.IDLE
     }
     val saved = s?.recordingId?.let { id -> items.any { it.id == id } } == true
+    val lines = s?.lines.orEmpty()
+    val partial = s?.partial
+    val hasText = lines.isNotEmpty() || partial != null
 
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
         val listState = rememberLazyListState()
+        val scope = rememberCoroutineScope()
+        val reduced = Theme.reducedMotion
+        /** Follow the newest text; false once the user scrolls up, until they come back down. */
+        val stick = remember { mutableStateOf(true) }
+        val follow by remember { derivedStateOf { !stick.value && listState.canScrollForward } }
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             TopBar(leading = { IconBtn(Ic.Back, "К записям", { vm.navigate(Screen.Library) }) }, side = side, title = "Живая запись")
             Column(Modifier.padding(horizontal = side)) {
-                LiveHeader(s, enginesReady)
+                LiveHeader(s, headerText(s, phase, perm, enginesReady, saved))
                 Spacer(Modifier.height(Space.s))
-                InfoLine(info(s, phase, saved, localNote))
+                InfoLine(info(s, phase, perm, localNote))
+                // the list's top hairline sits apart from the card, not on its border
+                Spacer(Modifier.height(Space.s))
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 LiveTranscript(
-                    lines = s?.lines.orEmpty(),
-                    partial = s?.partial,
+                    lines = lines,
+                    partial = partial,
                     state = listState,
+                    stick = stick,
                     side = side,
-                    empty = emptyContent(s, phase, perm, enginesReady, saved),
+                    empty = emptyContent(s, phase, perm, saved),
                 )
                 // hairline under the fixed header while lines scroll beneath it
-                val line by animateFloatAsState(if (listState.canScrollBackward) 1f else 0f, Motion.spec(Theme.reducedMotion, Motion.FAST), label = "liveDivider")
+                val line by animateFloatAsState(if (hasText && listState.canScrollBackward) 1f else 0f, Motion.spec(reduced, Motion.FAST), label = "liveDivider")
                 Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(Size.stroke).alpha(line).background(c.border))
             }
-            ActionBar(
-                phase = phase,
-                state = s,
-                perm = perm,
-                saved = saved,
+            BottomBar(
                 side = side,
-                onStart = start,
-                onSettings = openSettings,
-                onPause = vm::pauseLive,
-                onResume = vm::resumeLive,
-                onStop = vm::stopLive,
-                onDiscard = { confirmDiscard = true },
-                onOpenSaved = {
-                    val id = s?.recordingId
-                    vm.dismissLive()
-                    vm.navigate(if (id != null && saved) Screen.Processing(id) else Screen.Library)
+                divider = hasText && listState.canScrollForward,
+                top = {
+                    FloatingPill(follow && hasText, "К новым репликам") {
+                        stick.value = true
+                        scope.launch { listState.scrollToEnd(reduced) }
+                    }
                 },
-                onClose = {
-                    vm.dismissLive()
-                    vm.navigate(Screen.Library)
-                },
-            )
+            ) {
+                ActionBar(
+                    phase = phase,
+                    state = s,
+                    perm = perm,
+                    saved = saved,
+                    onStart = start,
+                    onSettings = openSettings,
+                    onPause = vm::pauseLive,
+                    onResume = vm::resumeLive,
+                    onStop = vm::stopLive,
+                    onDiscard = { confirmDiscard = true },
+                    onOpenSaved = {
+                        val id = s?.recordingId
+                        vm.dismissLive()
+                        vm.navigate(if (id != null && saved) Screen.Processing(id) else Screen.Library)
+                    },
+                    onClose = {
+                        vm.dismissLive()
+                        vm.navigate(Screen.Library)
+                    },
+                )
+            }
         }
     }
 
@@ -270,9 +290,9 @@ fun LiveScreen(vm: ReplikaViewModel) {
             text = "Звук и текст этой записи не сохранятся. Отменить это нельзя.",
             confirm = "Удалить", danger = true,
             onConfirm = {
+                // the toast comes from the view model once the take is really gone
                 vm.discardLive()
                 vm.navigate(Screen.Library)
-                vm.toast("Запись удалена")
             },
             onDismiss = { confirmDiscard = false },
         )
@@ -293,27 +313,29 @@ private fun KeepScreenOn(on: Boolean) {
 
 private data class HeaderText(val title: String, val subtitle: String)
 
-private fun headerText(s: LiveState?, enginesReady: Boolean): HeaderText = when (s?.status) {
-    null -> HeaderText(
+/** Header, info line and empty state each say something different: no message is shown twice. */
+private fun headerText(s: LiveState?, phase: Phase, perm: Perm, enginesReady: Boolean, saved: Boolean): HeaderText = when (phase) {
+    Phase.IDLE -> HeaderText(
         "Готово к записи",
         if (enginesReady) "Распознавание готово · всё на устройстве" else "Готовлю распознавание…",
     )
-    LiveStatus.STARTING -> HeaderText("Включаю микрофон", "Звук пишется только в память телефона")
-    LiveStatus.RECORDING -> HeaderText(
-        "Идёт запись",
-        if (s.modelsReady) "Распознаётся на устройстве" else "Готовлю распознавание… звук уже пишется",
+    Phase.PERMISSION -> HeaderText(
+        "Нет доступа к микрофону",
+        if (perm == Perm.DENIED_FOREVER) "Доступ выключен в настройках телефона" else "Нужно разрешение на запись звука",
     )
-    LiveStatus.PAUSED -> HeaderText("Пауза", "Микрофон выключен, пауза в запись не входит")
-    LiveStatus.FINISHING -> HeaderText("Завершаю…", "Дораспознаю последние фразы")
-    LiveStatus.DONE -> HeaderText("Запись сохранена", "Открываю обработку…")
-    LiveStatus.ERROR -> HeaderText("Запись остановлена", "Подробности ниже")
+    Phase.ERROR -> HeaderText("Запись остановлена", if (saved) "Записанное сохранено на телефоне" else "Ничего не сохранено")
+    Phase.LIVE -> when (s?.status) {
+        LiveStatus.STARTING -> HeaderText("Включаю микрофон", "Звук пишется только в память телефона")
+        LiveStatus.PAUSED -> HeaderText("Пауза", "Микрофон выключен, пауза в запись не входит")
+        LiveStatus.FINISHING, LiveStatus.DONE -> HeaderText("Завершаю…", "Сохраняю запись")
+        else -> HeaderText("Идёт запись", if (s?.modelsReady == true) "Распознаётся на устройстве" else "Звук пишется в память телефона")
+    }
 }
 
 /** Rec dot + state + timer, the level meter and one status line; the same size in every state. */
 @Composable
-private fun LiveHeader(s: LiveState?, enginesReady: Boolean) {
+private fun LiveHeader(s: LiveState?, text: HeaderText) {
     val c = Theme.colors
-    val text = headerText(s, enginesReady)
     val status = s?.status
     AppCard(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -344,7 +366,7 @@ private fun LiveHeader(s: LiveState?, enginesReady: Boolean) {
 
 /** Red dot: pulses while recording (steady with reduced motion), grey when idle or paused. */
 @Composable
-fun RecDot(status: LiveStatus?, size: androidx.compose.ui.unit.Dp = Space.m) {
+fun RecDot(status: LiveStatus?, size: Dp = Space.m) {
     val c = Theme.colors
     val recording = status == LiveStatus.RECORDING || status == LiveStatus.STARTING
     val alpha = if (recording && !Theme.reducedMotion) {
@@ -359,8 +381,9 @@ fun RecDot(status: LiveStatus?, size: androidx.compose.ui.unit.Dp = Space.m) {
 }
 
 /**
- * Scrolling bar meter of the input level. Ticks only while recording; on pause the bars settle to the
- * floor and the loop stops, so nothing animates while idle.
+ * Scrolling bar meter of the input level over a flat baseline. Silence (and every state that does not
+ * record) is just the line; bars rise from it while there is sound. Ticks only while recording; on
+ * pause the bars settle into the line and the loop stops, so nothing animates while idle.
  */
 @Composable
 private fun LevelMeter(level: Float, active: Boolean, modifier: Modifier) {
@@ -383,16 +406,20 @@ private fun LevelMeter(level: Float, active: Boolean, modifier: Modifier) {
         @Suppress("UNUSED_EXPRESSION") tick // redraw on every tick
         val w = 3.dp.toPx()
         val gap = 3.dp.toPx()
+        val mid = size.height / 2f
+        val stroke = Size.stroke.toPx() * 1.5f
+        drawLine(c.borderStrong, Offset(0f, mid), Offset(size.width, mid), stroke, StrokeCap.Round)
         val n = ((size.width + gap) / (w + gap)).toInt().coerceIn(1, LEVEL_HISTORY)
         val x0 = size.width - (n * (w + gap) - gap)
         for (i in 0 until n) {
             val v = history[LEVEL_HISTORY - n + i]
-            val h = (size.height * v).coerceAtLeast(w)
+            if (v <= 0f) continue
+            val h = (size.height * v).coerceAtLeast(w * 2)
             // older bars fade out to the left
             val a = 0.25f + 0.75f * (i + 1f) / n
             drawRoundRect(
-                (if (v > 0f) c.text else c.borderStrong).copy(alpha = if (v > 0f) a else 1f),
-                Offset(x0 + i * (w + gap), (size.height - h) / 2f), GSize(w, h), CornerRadius(w / 2f, w / 2f),
+                c.text.copy(alpha = a),
+                Offset(x0 + i * (w + gap), mid - h / 2f), GSize(w, h), CornerRadius(w / 2f, w / 2f),
             )
         }
     }
@@ -402,22 +429,29 @@ private fun LevelMeter(level: Float, active: Boolean, modifier: Modifier) {
 
 private enum class InfoKind { CALM, WARN, ERROR }
 
-private data class Info(val kind: InfoKind, val icon: ImageVector, val text: String)
+/** [legend] draws the provisional-voice mark (hollow dot) instead of an icon. */
+private data class Info(val kind: InfoKind, val icon: ImageVector, val text: String, val legend: Boolean = false)
 
-private fun info(s: LiveState?, phase: Phase, saved: Boolean, localNote: String?): Info = when {
-    phase == Phase.ERROR -> Info(
-        InfoKind.ERROR, Ic.Alert,
-        (s?.error ?: "Запись прервалась.") + if (saved) " Записанное до этого момента сохранено." else "",
+private fun info(s: LiveState?, phase: Phase, perm: Perm, localNote: String?): Info = when {
+    phase == Phase.ERROR -> Info(InfoKind.ERROR, Ic.Alert, s?.error ?: "Запись прервалась.")
+    phase == Phase.PERMISSION -> Info(
+        InfoKind.CALM, Ic.Info,
+        if (perm == Perm.DENIED_FOREVER) "Без микрофона живая запись невозможна. Импорт готовых файлов работает и так."
+        else "Звук пишется только в память телефона и никуда не отправляется.",
     )
     s?.micSilenced == true -> Info(InfoKind.WARN, Ic.MicOff, "Микрофон не слышит звук — проверьте, не занят ли он другим приложением")
+    // a notice explains why live text stopped or is missing; it goes before the lag warning
+    s?.notice != null -> Info(InfoKind.CALM, Ic.Info, s.notice)
+    s?.status == LiveStatus.FINISHING && !s.modelsReady -> Info(
+        InfoKind.CALM, Ic.Cpu, "Дожидаюсь загрузки моделей, чтобы распознать последние фразы",
+    )
     s?.lagging == true && s.status == LiveStatus.RECORDING -> Info(
         InfoKind.WARN, Ic.Alert,
         "Распознавание отстаёт на ${(s.backlogMs + 500) / 1000} с — звук сохраняется, текст догонит",
     )
-    s?.notice != null -> Info(InfoKind.CALM, Ic.Info, s.notice)
     localNote != null -> Info(InfoKind.CALM, Ic.Info, localNote)
-    s != null -> Info(InfoKind.CALM, Ic.Question, "Голоса предварительные: участники и окончательный текст появятся после завершения")
-    else -> Info(InfoKind.CALM, Ic.Info, "Текст идёт по ходу разговора, а после завершения — полная обработка с участниками и итогами.")
+    s != null -> Info(InfoKind.CALM, Ic.Question, "Голоса предварительные: участники и окончательный текст появятся после завершения", legend = true)
+    else -> Info(InfoKind.CALM, Ic.Info, "После завершения — полная обработка: участники, окончательный текст и итоги.")
 }
 
 /** One fixed slot under the header: the voices legend by default, warnings and notices in its place. */
@@ -438,7 +472,11 @@ private fun InfoLine(info: Info) {
                 .padding(horizontal = Space.m, vertical = Space.m),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(info.icon, null, Modifier.size(Size.iconSmall), tint = if (info.kind == InfoKind.ERROR) c.danger else if (warn) c.text else c.muted)
+            if (info.legend) {
+                Box(Modifier.size(Size.iconSmall), contentAlignment = Alignment.Center) { VoiceDot(null) }
+            } else {
+                Icon(info.icon, null, Modifier.size(Size.iconSmall), tint = if (info.kind == InfoKind.ERROR) c.danger else if (warn) c.text else c.muted)
+            }
             Spacer(Modifier.width(Space.s))
             Text(info.text, style = Type.label, color = if (warn) c.text else c.muted, modifier = Modifier.weight(1f))
         }
@@ -449,98 +487,80 @@ private fun InfoLine(info: Info) {
 
 private data class Empty(val key: String, val icon: ImageVector, val title: String, val text: String, val danger: Boolean = false)
 
-private fun emptyContent(s: LiveState?, phase: Phase, perm: Perm, enginesReady: Boolean, saved: Boolean): Empty = when (phase) {
+private fun emptyContent(s: LiveState?, phase: Phase, perm: Perm, saved: Boolean): Empty = when (phase) {
     Phase.PERMISSION -> if (perm == Perm.DENIED_FOREVER) {
-        Empty("perm2", Ic.MicOff, "Доступ к микрофону запрещён", "Его можно включить в настройках приложения: Разрешения → Микрофон.")
+        Empty("perm2", Ic.Settings, "Включите доступ в настройках", "«Разрешения» → «Микрофон» → «Разрешить». Потом вернитесь сюда.")
     } else {
-        Empty("perm", Ic.MicOff, "Нужен доступ к микрофону", "Без него записать встречу не получится. Звук пишется только в память телефона и никуда не отправляется.")
+        Empty("perm", Ic.MicOff, "Разрешите запись звука", "Нажмите «Разрешить доступ» и подтвердите запрос телефона.")
     }
     // the reason itself is in the info line above; here only what to do next
     Phase.ERROR -> if (saved) {
-        Empty("errorSaved", Ic.Alert, "Запись прервалась", "Записанное сохранено. Откройте запись — она пройдёт полную обработку.", danger = true)
+        Empty("errorSaved", Ic.Records, "Откройте запись", "Она пройдёт полную обработку: участники, окончательный текст и итоги.")
     } else {
-        Empty("error", Ic.Alert, "Не получилось записать", "Ничего не сохранено. Можно начать запись заново.", danger = true)
+        Empty("error", Ic.Alert, "Попробуйте ещё раз", "Нажмите «Начать заново», когда будете готовы говорить.", danger = true)
     }
-    Phase.IDLE -> Empty(
-        "idle", Ic.Mic, "Текст появится здесь",
-        if (enginesReady) "Нажмите «Начать запись» и говорите — фразы появятся по ходу разговора."
-        else "Модели распознавания загружаются. Начать запись можно уже сейчас — ничего не потеряется.",
-    )
+    Phase.IDLE -> Empty("idle", Ic.Mic, "Текст появится здесь", "Нажмите «Начать запись» и говорите — фразы будут появляться по ходу разговора.")
     Phase.LIVE -> when {
         s?.status == LiveStatus.PAUSED -> Empty("paused", Ic.Pause, "Запись на паузе", "Нажмите «Продолжить», и текст снова пойдёт.")
-        s?.status == LiveStatus.FINISHING || s?.status == LiveStatus.DONE -> Empty("finishing", Ic.Records, "Завершаю распознавание…", "Сейчас откроется обработка записи.")
-        s?.modelsReady == false -> Empty("loading", Ic.Cpu, "Готовлю распознавание…", "Звук уже записывается. Текст появится через несколько секунд.")
+        s?.status == LiveStatus.FINISHING || s?.status == LiveStatus.DONE ->
+            Empty("finishing", Ic.Records, "Скоро откроется обработка", "Записанный звук пройдёт полную обработку: участники, окончательный текст и итоги.")
+        s?.modelsReady == false -> Empty("loading", Ic.Cpu, "Готовлю распознавание…", "Текст появится через несколько секунд — ничего из сказанного не потеряется.")
         else -> Empty("speak", Ic.Mic, "Говорите — текст появится здесь", "Фраза появляется сразу, а после короткой паузы в речи подтверждается.")
     }
 }
 
 /**
  * Confirmed lines + the phrase still being spoken. Keys are stable (a line's start time), so a new
- * line only composes itself; the partial has its own item that stays in place while its text grows.
- * Follows the newest text while the user is at the bottom; scrolling up stops that until they return.
+ * line only composes itself; the partial has its own item of the same shape as a line, so promoting
+ * it to a confirmed line does not move anything. Follows the newest text while the user is at the
+ * bottom ([stick]); scrolling up stops that until they return.
  */
 @Composable
-private fun LiveTranscript(lines: List<LiveLine>, partial: LivePartial?, state: LazyListState, side: androidx.compose.ui.unit.Dp, empty: Empty) {
-    val scope = rememberCoroutineScope()
+private fun LiveTranscript(
+    lines: List<LiveLine>,
+    partial: LivePartial?,
+    state: LazyListState,
+    stick: MutableState<Boolean>,
+    side: Dp,
+    empty: Empty,
+) {
     val reduced = Theme.reducedMotion
-    var stick by remember { mutableStateOf(true) }
     LaunchedEffect(state) {
         state.interactionSource.interactions.collect {
             when (it) {
-                is DragInteraction.Start -> stick = false
-                is DragInteraction.Stop, is DragInteraction.Cancel -> if (!state.canScrollForward) stick = true
+                is DragInteraction.Start -> stick.value = false
+                is DragInteraction.Stop, is DragInteraction.Cancel -> if (!state.canScrollForward) stick.value = true
             }
         }
     }
     LaunchedEffect(state) {
-        snapshotFlow { state.canScrollForward }.distinctUntilChanged().collect { if (!it && !state.isScrollInProgress) stick = true }
+        snapshotFlow { state.canScrollForward }.distinctUntilChanged().collect { if (!it && !state.isScrollInProgress) stick.value = true }
     }
     LaunchedEffect(lines.size, partial?.text) {
-        if (stick) state.scrollToEnd(reduced)
+        if (stick.value) state.scrollToEnd(reduced)
     }
     val hasText = lines.isNotEmpty() || partial != null
     val shownEmpty = remember { HashMap<String, Empty>() }
     shownEmpty[empty.key] = empty
 
-    Box(Modifier.fillMaxSize()) {
-        Fade(hasText, Modifier.fillMaxSize()) { text ->
-            if (!text) {
-                Fade(empty.key, Modifier.fillMaxSize()) { k ->
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
-                            EmptyStateIcon(shownEmpty[k] ?: empty)
-                        }
+    Fade(hasText, Modifier.fillMaxSize()) { text ->
+        if (!text) {
+            Fade(empty.key, Modifier.fillMaxSize()) { k ->
+                Box(Modifier.fillMaxSize(), contentAlignment = OPTICAL_CENTER) {
+                    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                        EmptyStateIcon(shownEmpty[k] ?: empty)
                     }
-                }
-            } else {
-                LazyColumn(
-                    state = state,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(start = side, end = side, top = Space.s, bottom = Space.xl),
-                ) {
-                    itemsIndexed(lines, key = { _, l -> "l${l.startMs}" }, contentType = { _, _ -> "line" }) { i, l ->
-                        val prev = lines.getOrNull(i - 1)
-                        LiveLineRow(l, showVoice = prev == null || prev.speaker != l.speaker || l.startMs - prev.endMs > TURN_GAP_MS, muted = false)
-                    }
-                    item(key = "partial", contentType = "partial") { PartialRow(partial) }
                 }
             }
-        }
-        // lines slide under the action bar through a short fade instead of a hard cut
-        Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(Size.fade)
-                .background(Brush.verticalGradient(listOf(Theme.colors.bg.copy(alpha = 0f), Theme.colors.bg))),
-        )
-        val follow by remember { derivedStateOf { !stick && state.canScrollForward } }
-        AnimatedVisibility(
-            visible = follow && hasText,
-            enter = fadeIn(Motion.spec(Theme.reducedMotion)), exit = fadeOut(Motion.spec(Theme.reducedMotion, Motion.FAST)),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Space.l),
-        ) {
-            PrimaryButton("К новым репликам", {
-                stick = true
-                scope.launch { state.scrollToEnd(reduced) }
-            }, icon = Ic.Down)
+        } else {
+            LazyColumn(
+                state = state,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = side, end = side, top = Space.xs, bottom = Space.s),
+            ) {
+                items(lines, key = { "l${it.startMs}" }, contentType = { "line" }) { LiveLineRow(it) }
+                item(key = "partial", contentType = "partial") { PartialRow(partial) }
+            }
         }
     }
 }
@@ -551,9 +571,9 @@ private fun EmptyStateIcon(e: Empty) {
     Column(Modifier.padding(horizontal = Space.xl, vertical = Space.xl), horizontalAlignment = Alignment.CenterHorizontally) {
         EmptyIcon(e.icon, danger = e.danger)
         Spacer(Modifier.height(Space.l))
-        Text(e.title, style = Type.heading, color = c.text, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Text(e.title, style = Type.heading, color = c.text, textAlign = TextAlign.Center)
         Spacer(Modifier.height(Space.s))
-        Text(e.text, style = Type.body, color = c.muted, textAlign = androidx.compose.ui.text.style.TextAlign.Center, modifier = Modifier.widthIn(max = 360.dp))
+        Text(e.text, style = Type.body, color = c.muted, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 360.dp))
     }
 }
 
@@ -572,55 +592,62 @@ private suspend fun LazyListState.scrollToEnd(reduced: Boolean) {
 }
 
 /**
- * One live line, also used for the draft on the processing screen. The voice chip is dashed and its
- * dot hollow: a provisional hint, unlike the solid speaker labels of the final transcript.
+ * Frame of a live row, the same geometry as an utterance of the transcript: a 48dp header line with
+ * the speaker dot, name and time, the text under it and a [Space.m] gap below. [mark] is the dot.
  */
 @Composable
-internal fun LiveLineRow(line: LiveLine, showVoice: Boolean, muted: Boolean, modifier: Modifier = Modifier) {
+private fun LiveRowFrame(
+    mark: @Composable () -> Unit,
+    label: String,
+    startMs: Long,
+    lang: String,
+    provisional: Boolean,
+    description: String,
+    text: @Composable () -> Unit,
+) {
     val c = Theme.colors
-    Column(modifier.fillMaxWidth().padding(top = if (showVoice) Space.m else Space.xs)) {
-        if (showVoice) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                VoiceChip(line.speaker)
+    Column(Modifier.fillMaxWidth().padding(bottom = Space.m).semantics(mergeDescendants = true) { contentDescription = description }) {
+        Row(Modifier.heightIn(min = Size.touch).clearAndSetSemantics { }, verticalAlignment = Alignment.CenterVertically) {
+            mark()
+            Spacer(Modifier.width(Space.s))
+            Text(label, style = Type.speaker, color = if (provisional) c.muted else c.text, maxLines = 1)
+            Spacer(Modifier.width(Space.m))
+            Text(fmtTime(startMs), style = Type.speakerTime, color = c.muted, maxLines = 1)
+            if (lang == "en") {
                 Spacer(Modifier.width(Space.s))
-                Text(fmtTime(line.startMs), style = Type.speakerTime, color = c.muted, maxLines = 1)
-                if (line.lang == "en") {
-                    Spacer(Modifier.width(Space.s))
-                    Text("EN", style = Type.labelNum, color = c.muted)
-                }
+                Text("EN", style = Type.labelNum, color = c.muted)
             }
-            Spacer(Modifier.height(Space.xs))
         }
-        Text(line.text, style = Type.body, color = if (muted) c.muted else c.text)
+        text()
     }
 }
 
-/** «Голос N» as a dashed outline pill: visibly not a final speaker. */
+/**
+ * One confirmed live line, also used for the draft on the processing screen. The voice dot is hollow:
+ * a provisional hint, unlike the solid speaker dots of the final transcript.
+ */
 @Composable
-internal fun VoiceChip(speaker: Int?) {
+internal fun LiveLineRow(line: LiveLine) {
+    val c = Theme.colors
+    LiveRowFrame(
+        mark = { VoiceDot(line.speaker) },
+        label = liveVoiceLabel(line.speaker),
+        startMs = line.startMs,
+        lang = line.lang,
+        provisional = false,
+        description = "${liveVoiceLabel(line.speaker)}, предварительно, ${fmtTime(line.startMs)}: ${line.text}",
+    ) { Text(line.text, style = Type.body, color = c.text) }
+}
+
+/** Hollow dot in the voice's tone (muted when the voice is unknown): the mark of a provisional speaker. */
+@Composable
+internal fun VoiceDot(speaker: Int?) {
     val c = Theme.colors
     val tone = if (speaker == null) c.muted else c.speakers[Math.floorMod(speaker - 1, c.speakers.size)]
-    val dash = c.borderStrong
-    Row(
-        Modifier.height(Size.chip)
-            .drawBehind {
-                val r = size.height / 2f
-                drawRoundRect(
-                    dash, cornerRadius = CornerRadius(r, r),
-                    style = Stroke(width = Size.stroke.toPx() * 1.2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))),
-                )
-            }
-            .padding(horizontal = Space.m)
-            .semantics { contentDescription = "${liveVoiceLabel(speaker)}, предварительно" },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(Size.dot).border(Size.stroke * 1.5f, tone, Radius.pill))
-        Spacer(Modifier.width(Space.s))
-        Text(liveVoiceLabel(speaker), style = Type.label, color = c.text, maxLines = 1)
-    }
+    Box(Modifier.size(Size.dot).border(Size.stroke * 1.5f, tone, Radius.pill))
 }
 
-/** The phrase still being spoken: muted text with a blinking caret. Empty (zero height) between phrases. */
+/** The phrase still being spoken: the row of a line with muted text and a blinking caret. Zero height between phrases. */
 @Composable
 private fun PartialRow(partial: LivePartial?) {
     val c = Theme.colors
@@ -644,9 +671,14 @@ private fun PartialRow(partial: LivePartial?) {
             Box(Modifier.fillMaxSize().alpha(blink).clip(Radius.pill).background(c.muted))
         },
     )
-    Column(Modifier.fillMaxWidth().padding(top = Space.m).semantics { contentDescription = "Распознаётся: ${partial.text}" }) {
-        Text(text, style = Type.body, color = c.muted, inlineContent = caret)
-    }
+    LiveRowFrame(
+        mark = { VoiceDot(null) },
+        label = "Распознаётся…",
+        startMs = partial.startMs,
+        lang = partial.lang,
+        provisional = true,
+        description = "Распознаётся: ${partial.text}",
+    ) { Text(text, style = Type.body, color = c.muted, inlineContent = caret) }
 }
 
 // ---------------------------------------------------------------- action bar
@@ -657,7 +689,6 @@ private fun ActionBar(
     state: LiveState?,
     perm: Perm,
     saved: Boolean,
-    side: androidx.compose.ui.unit.Dp,
     onStart: () -> Unit,
     onSettings: () -> Unit,
     onPause: () -> Unit,
@@ -668,10 +699,7 @@ private fun ActionBar(
     onClose: () -> Unit,
 ) {
     // one 48dp row in every phase; only its contents cross-fade
-    Fade(
-        phase,
-        Modifier.fillMaxWidth().navigationBarsPadding().padding(start = side, end = side, top = Space.s, bottom = Space.l).height(Size.touch),
-    ) { p ->
+    Fade(phase, Modifier.fillMaxWidth().height(Size.touch)) { p ->
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
             when (p) {
                 Phase.IDLE -> PrimaryButton("Начать запись", onStart, Modifier.fillMaxWidth(), Ic.Mic)

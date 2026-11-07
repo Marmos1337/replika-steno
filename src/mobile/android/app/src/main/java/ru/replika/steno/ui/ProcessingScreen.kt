@@ -17,13 +17,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -53,9 +52,6 @@ import ru.replika.steno.ui.theme.Space
 import ru.replika.steno.ui.theme.Theme
 import ru.replika.steno.ui.theme.Type
 
-/** The bottom action block always reserves two stacked buttons, so «Отменить» and «К записям» sit in one place. */
-private val ACTIONS_HEIGHT = Size.touch * 2 + Space.s
-
 private enum class View { RUNNING, QUEUED, FAILED }
 
 @Composable
@@ -65,6 +61,7 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
     val loaded by vm.graph.store.loaded.collectAsState()
     val job by vm.job.collectAsState()
     val started by vm.jobStartedAt.collectAsState()
+    val live by vm.live.collectAsState()
     val rec = items.firstOrNull { it.id == id }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) vm.import(uri)
@@ -81,9 +78,11 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
 
     val mine = job?.takeIf { it.recordingId == id }
     val other = job?.takeIf { it.recordingId != id }
+    // a live take holds the queue: anything new waits until it is saved
+    val liveHolds = rec.state == RecordingState.NEW && mine == null && live?.status?.terminal == false
     val view = when {
         rec.state == RecordingState.FAILED -> View.FAILED
-        rec.state == RecordingState.NEW && other != null -> View.QUEUED
+        rec.state == RecordingState.NEW && (other != null || liveHolds) -> View.QUEUED
         else -> View.RUNNING
     }
     val failure = failureKind(rec.error)
@@ -101,7 +100,7 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
             LazyColumn(
                 Modifier.weight(1f).fillMaxWidth(),
                 state = scroll,
-                contentPadding = PaddingValues(start = side, end = side, bottom = Space.xl),
+                contentPadding = PaddingValues(start = side, end = side, bottom = Space.l),
             ) {
                 item(key = "head") {
                     Column(Modifier.fillMaxWidth()) {
@@ -122,7 +121,7 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
                             Column(Modifier.fillMaxWidth()) {
                                 when (v) {
                                     View.FAILED -> FailedView(rec.error, failure)
-                                    View.QUEUED -> QueuedView(items.firstOrNull { it.id == other?.recordingId }?.title)
+                                    View.QUEUED -> QueuedView(items.firstOrNull { it.id == other?.recordingId }?.title, liveHolds && other == null)
                                     View.RUNNING -> RunningView(mine, started?.takeIf { it.first == id }?.second)
                                 }
                             }
@@ -131,30 +130,30 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
                 }
                 if (draft.isNotEmpty()) {
                     item(key = "draftTitle") { DraftTitle() }
-                    itemsIndexed(draft, key = { _, l -> "d${l.startMs}" }) { i, l ->
-                        val prev = draft.getOrNull(i - 1)
-                        LiveLineRow(l, showVoice = prev == null || prev.speaker != l.speaker, muted = true)
-                    }
+                    items(draft, key = { "d${it.startMs}" }) { LiveLineRow(it) }
                 }
             }
-            // Actions anchored to the bottom: two-button height in every state, only the labels change.
-            Fade(view, Modifier.fillMaxWidth().navigationBarsPadding().padding(start = side, end = side, bottom = Space.l).height(ACTIONS_HEIGHT)) { v ->
-                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(Space.s, Alignment.Bottom)) {
-                    when (v) {
-                        View.RUNNING -> SecondaryButton("Отменить", vm::cancelJob, Modifier.fillMaxWidth(), Ic.Close, enabled = mine != null)
-                        View.QUEUED -> SecondaryButton("К записям", toLibrary, Modifier.fillMaxWidth())
-                        View.FAILED -> {
-                            when (failure) {
-                                FailureKind.STOPPED -> PrimaryButton("Обработать снова", { vm.reprocess(id) }, Modifier.fillMaxWidth(), Ic.Refresh)
-                                FailureKind.OTHER -> PrimaryButton("Попробовать снова", { vm.reprocess(id) }, Modifier.fillMaxWidth(), Ic.Refresh)
-                                // a live take has no file to swap: offer a new take instead
-                                FailureKind.NO_SPEECH, FailureKind.CORRUPT -> if (rec.sourceUri.startsWith(LIVE_SOURCE)) {
-                                    PrimaryButton("Новая живая запись", { vm.navigate(Screen.Live) }, Modifier.fillMaxWidth(), Ic.Mic)
-                                } else {
-                                    PrimaryButton("Выбрать другой файл", { picker.launch(AUDIO_TYPES) }, Modifier.fillMaxWidth(), Ic.File)
+            // One 48dp row of actions in every state (as on the live screen), only its contents cross-fade.
+            BottomBar(side = side, divider = scroll.canScrollForward) {
+                Fade(view, Modifier.fillMaxWidth().height(Size.touch)) { v ->
+                    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
+                        when (v) {
+                            View.RUNNING -> SecondaryButton("Отменить", vm::cancelJob, Modifier.fillMaxWidth(), Ic.Close, enabled = mine != null)
+                            View.QUEUED -> SecondaryButton("К записям", toLibrary, Modifier.fillMaxWidth())
+                            View.FAILED -> {
+                                val m = Modifier.weight(1f)
+                                when (failure) {
+                                    FailureKind.STOPPED -> PrimaryButton("Обработать снова", { vm.reprocess(id) }, m, Ic.Refresh)
+                                    FailureKind.OTHER -> PrimaryButton("Попробовать снова", { vm.reprocess(id) }, m, Ic.Refresh)
+                                    // a live take has no file to swap: offer a new take instead
+                                    FailureKind.NO_SPEECH, FailureKind.CORRUPT -> if (rec.sourceUri.startsWith(LIVE_SOURCE)) {
+                                        PrimaryButton("Новая живая запись", { vm.navigate(Screen.Live) }, m, Ic.Mic)
+                                    } else {
+                                        PrimaryButton("Выбрать другой файл", { picker.launch(AUDIO_TYPES) }, m, Ic.File)
+                                    }
                                 }
+                                OutlineIconButton(Ic.Close, "К записям", toLibrary)
                             }
-                            SecondaryButton("К записям", toLibrary, Modifier.fillMaxWidth())
                         }
                     }
                 }
@@ -166,14 +165,14 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
 @Composable
 private fun DraftTitle() {
     val c = Theme.colors
-    Column(Modifier.fillMaxWidth().padding(top = Space.xxl)) {
+    // the standard gap between sections; the rows below bring their own 48dp header line
+    Column(Modifier.fillMaxWidth().padding(top = Space.xl)) {
         SectionTitle("Черновик живой записи")
         Spacer(Modifier.height(Space.xs))
         Text(
             "Окончательный текст и участники появятся после обработки. В экспорт черновик не попадает.",
             style = Type.label, color = c.muted,
         )
-        Spacer(Modifier.height(Space.xs))
     }
 }
 
@@ -218,18 +217,19 @@ private fun RunningView(job: ActiveJob?, startedAt: Long?) {
             StageRow(s, state, if (s == stage) job?.progress?.stageFraction ?: 0f else 0f, waitingForModels = preparing && s == stage)
         }
     }
-    Spacer(Modifier.height(Space.l))
-    Text(
-        "Расшифровка откроется сразу после распознавания. Оформление текста и итоги встречи доделаются в фоне.",
-        style = Type.label, color = c.muted,
-    )
-    Spacer(Modifier.height(Space.s))
-    // Reserved even when hidden, so nothing below it moves.
-    Text(
-        "Первый запуск: языковая модель (около 550 МБ) копируется из приложения. Это займёт пару минут, дальше будет быстрее.",
-        style = Type.label, color = c.muted, minLines = 2,
-        modifier = Modifier.alpha(if (preparing) 1f else 0f),
-    )
+    Spacer(Modifier.height(Space.m))
+    // One note slot sized for the longer text, so nothing below moves when the first-run note shows.
+    Box(Modifier.fillMaxWidth()) {
+        val firstRun by animateFloatAsState(if (preparing) 1f else 0f, Motion.spec(Theme.reducedMotion), label = "firstRun")
+        Text(
+            "Расшифровка откроется сразу после распознавания. Оформление текста и итоги встречи доделаются в фоне.",
+            style = Type.label, color = c.muted, modifier = Modifier.alpha(1f - firstRun),
+        )
+        Text(
+            "Первый запуск: языковая модель (около 550 МБ) копируется из приложения. Это займёт пару минут, дальше будет быстрее.",
+            style = Type.label, color = c.muted, modifier = Modifier.alpha(firstRun),
+        )
+    }
 }
 
 @Composable
@@ -298,7 +298,7 @@ private fun FailedView(error: String?, kind: FailureKind) {
 }
 
 @Composable
-private fun QueuedView(otherTitle: String?) {
+private fun QueuedView(otherTitle: String?, afterLive: Boolean) {
     val c = Theme.colors
     AppCard(Modifier.fillMaxWidth()) {
         EmptyIcon(Ic.Records)
@@ -306,8 +306,11 @@ private fun QueuedView(otherTitle: String?) {
         Text("В очереди", style = Type.heading, color = c.text)
         Spacer(Modifier.height(Space.s))
         Text(
-            if (otherTitle != null) "Сейчас обрабатывается «$otherTitle». Эта запись начнётся сразу после неё."
-            else "Запись начнёт обрабатываться, как только освободится движок.",
+            when {
+                otherTitle != null -> "Сейчас обрабатывается «$otherTitle». Эта запись начнётся сразу после неё."
+                afterLive -> "Идёт живая запись. Эта запись начнёт обрабатываться, как только та будет сохранена."
+                else -> "Запись начнёт обрабатываться, как только освободится движок."
+            },
             style = Type.body, color = c.muted,
         )
     }
