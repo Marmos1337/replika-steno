@@ -1,0 +1,34 @@
+{
+ "transcript": [
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 0,
+   "end_ms": 2991,
+   "text": "Hi Tom, did you finish the quarterly report?"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 2230,
+   "end_ms": 6016,
+   "text": "Almost. I still need the sales numbers from Anna."
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 3534,
+   "end_ms": 4094,
+   "text": "Okay,"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 5217,
+   "end_ms": 9019,
+   "text": "Okay, I will ask her today. Please send it by Friday."
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 7705,
+   "end_ms": 9871,
+   "text": "Sure, Friday works for me."
+  }
+ ]
+}

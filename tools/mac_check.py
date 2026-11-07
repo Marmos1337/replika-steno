@@ -13,13 +13,13 @@ def load(p):
     raw = subprocess.run(["ffmpeg", "-v", "error", "-i", p, "-f", "f32le", "-ac", "1", "-ar", str(SR), "-"], check=True, capture_output=True).stdout
     return np.frombuffer(raw, dtype=np.float32).copy()
 
-def vad_phrases(x):
+def vad_phrases(x, min_silence=0.25, max_speech=12):
     cfg = sherpa_onnx.VadModelConfig()
     cfg.silero_vad.model = f"{M}/diar/silero_vad.onnx"
     cfg.silero_vad.threshold = 0.5
-    cfg.silero_vad.min_silence_duration = 0.25
+    cfg.silero_vad.min_silence_duration = min_silence
     cfg.silero_vad.min_speech_duration = 0.25
-    cfg.silero_vad.max_speech_duration = 12
+    cfg.silero_vad.max_speech_duration = max_speech
     cfg.sample_rate = SR
     vad = sherpa_onnx.VoiceActivityDetector(cfg, buffer_size_in_seconds=max(60, len(x) // SR + 10))
     out = []
@@ -131,4 +131,5 @@ def main():
         json.dump({"transcript": [{k: v for k, v in r.items() if not k.startswith("_")} for r in res]},
                   open(sys.argv[sys.argv.index("--out") + 1], "w"), ensure_ascii=False, indent=1)
 
-main()
+if __name__ == "__main__":
+    main()

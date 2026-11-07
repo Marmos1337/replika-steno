@@ -1,0 +1,436 @@
+{
+ "transcript": [
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 51,
+   "end_ms": 5093,
+   "text": "Добрый день, коллеги. Давайте коротко обсудим релиз мобильного приложения."
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 5751,
+   "end_ms": 12012,
+   "text": "Добрый день. Сборка почти готова. Осталось поправить экран оплаты и обновить иконки"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 12889,
+   "end_ms": 16079,
+   "text": "Хорошо, когда сможешь показать тестовую версию"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 16973,
+   "end_ms": 23504,
+   "text": "Думаю, к четвергу мне нужен доступ к тестовому серверу, без него я не провею оплату"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 24465,
+   "end_ms": 30342,
+   "text": "Доступ выдам сегодня до вечера. Ещё нужно подготовить описание для магазина-приложений."
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 30625,
+   "end_ms": 34742,
+   "text": "Описание напишет Марина, я ей передам скриншоты в среду."
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 35434,
+   "end_ms": 40834,
+   "text": "Отлично. Тогда фиксируем релиз в пятницу, если тесты пройдут без ошибок."
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 41661,
+   "end_ms": 46724,
+   "text": "Договорились. Если что-то сломается, я сразу напишу в общий чат"
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 47702,
+   "end_ms": 50453,
+   "text": "Hi, Tom. Did you finish the quarterly report"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 51162,
+   "end_ms": 55026,
+   "text": "Almost. I still need the sales numbers Romanna"
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 55515,
+   "end_ms": 59312,
+   "text": "Okay, I will ask her today. Please send it by Friday"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 60038,
+   "end_ms": 62282,
+   "text": "Sure, Friday works for me."
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 62215,
+   "end_ms": 67362,
+   "text": "Добрый день, коллеги. Давайте коротко обсудим релиз мобильного приложения."
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 68054,
+   "end_ms": 74264,
+   "text": "Добрый день. Сборка почти готова. Осталось поправить экран оплаты и обновить иконки"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 75124,
+   "end_ms": 78314,
+   "text": "Хорошо, когда сможешь показать тестовую версию"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 79225,
+   "end_ms": 85755,
+   "text": "Думаю, к четвергу мне нужен доступ к тестовому серверу, без него я не провею оплату"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 86717,
+   "end_ms": 92337,
+   "text": "Доступ выдам сегодня до вечера. Ещё нужно подготовить описание для магазина-приложений"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 92860,
+   "end_ms": 96994,
+   "text": "Описание напишет Марина, я ей передам скриншоты в среду"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 97686,
+   "end_ms": 102968,
+   "text": "Отлично. тогда фиксируем релиз в пятницу, если тесты пройдут без ошибок."
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 103896,
+   "end_ms": 108959,
+   "text": "Договорились. Если что-то сломается, я сразу напишу в общий чат"
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 109971,
+   "end_ms": 112722,
+   "text": "Hi, Tom. Did you finish the quarterly report"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 113414,
+   "end_ms": 117329,
+   "text": "Almost. I still need the sales numbers from Anna."
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 117784,
+   "end_ms": 121429,
+   "text": "Okay, I will ask her today. Please send it by Friday"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 122290,
+   "end_ms": 124551,
+   "text": "Sure, Friday works for me"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 124467,
+   "end_ms": 129958,
+   "text": "Добрый день, коллеги. Давайте коротко обсудим релиз мобильного приложения"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 129958,
+   "end_ms": 136515,
+   "text": "Добрый день. Сборка почти готова. Осталось поправить экран оплаты и обновить иконки."
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 137410,
+   "end_ms": 140565,
+   "text": "Хорошо, когда сможешь показать тестовую версию?"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 141477,
+   "end_ms": 148007,
+   "text": "Думаю, к четвергу мне нужен доступ к тестовому серверу, без него я не провею оплату"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 149037,
+   "end_ms": 154902,
+   "text": "Доступ выдам сегодня до вечера. Ещё нужно подготовить описание для магазина-риложений"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 155112,
+   "end_ms": 159229,
+   "text": "Описание напишет Марина, я ей передам скриншоты в среду."
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 159938,
+   "end_ms": 165338,
+   "text": "Отлично. Тогда фиксируем релиз в пятницу, если тесты пройдут без ошибок."
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 166148,
+   "end_ms": 171210,
+   "text": "Договорились. Если что-то сломается, я сразу напишу в общий чат"
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 172189,
+   "end_ms": 174957,
+   "text": "Hi, Tom. didid you finish the quarterly report"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 175665,
+   "end_ms": 179564,
+   "text": "Almost. I still need the sales numbers from Anna"
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 180019,
+   "end_ms": 183698,
+   "text": "Okay, I will ask her today. Please send it by Friday."
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 184508,
+   "end_ms": 186786,
+   "text": "Sure, Friday worked for me"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 186735,
+   "end_ms": 191967,
+   "text": "Добрый день, коллеги. Давайте коротко обсудим релиз мобильного приложения"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 192524,
+   "end_ms": 198767,
+   "text": "Добрый день. Сборка почти готова. Осталось поправить экран оплаты и обновить иконки."
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 199628,
+   "end_ms": 202834,
+   "text": "Хорошо, когда сможешь показать тестовую версию"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 203729,
+   "end_ms": 210259,
+   "text": "Думаю, к четвергу мне нужен доступ к тестовому серверу, без него я не провею оплату"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 211221,
+   "end_ms": 217094,
+   "text": "Доступ выдам сегодня до вечера. Ещё нужно подготовить описание для магазина-приложений"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 217364,
+   "end_ms": 221481,
+   "text": "Описание напишет Марина, я ей передам скриншоты в среду."
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 222190,
+   "end_ms": 227573,
+   "text": "Отлично. Тогда фиксируем релиз в пятницу, если тесты пройдут без ошибок"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 228417,
+   "end_ms": 233462,
+   "text": "Договорились. Если что-то сломается, я сразу напишу в общий чат"
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 234441,
+   "end_ms": 237192,
+   "text": "Hi, Tom. did you finish the quarterly report"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 237917,
+   "end_ms": 241799,
+   "text": "Almost. I still need the sales numbers from Anna"
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 242288,
+   "end_ms": 245950,
+   "text": "Okay, I will ask her today. Please send it by Friday"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 246777,
+   "end_ms": 248987,
+   "text": "Sure, Friday works for me"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 248970,
+   "end_ms": 254117,
+   "text": "Добрый день, коллеги. Давайте коротко обсудим релиз мобильного приложения"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 254759,
+   "end_ms": 261019,
+   "text": "Добрый день. Сборка почти готова. Осталось поправить экран оплаты и обновить иконки"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 261880,
+   "end_ms": 265069,
+   "text": "Хорошо, когда сможешь показать тестовую версию"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 265980,
+   "end_ms": 272511,
+   "text": "Думаю, к четвергу мне нужен доступ к тестовому серверу, без него я не провею оплату"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 273473,
+   "end_ms": 279334,
+   "text": "Доступ выдам сегодня до вечера. Ещё нужно подготовить описание для магазина-приложений"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 279615,
+   "end_ms": 283733,
+   "text": "Описание напишет Марина, я ей передам скриншоты в среду."
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 284425,
+   "end_ms": 289842,
+   "text": "Отлично. Тогда фиксируем релиз в пятницу, если тесты пройдут без ошибок"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 290652,
+   "end_ms": 295731,
+   "text": "Договорились. Если что-то сломается, я сразу напишу в общий чат."
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 296676,
+   "end_ms": 299444,
+   "text": "Hi, Tom. did you finish the quarterly report"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 300169,
+   "end_ms": 304034,
+   "text": "Almost. I still need the sales numbers from Anna"
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 304523,
+   "end_ms": 308269,
+   "text": "Okay, I will ask her today. Please send it by Friday"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 309029,
+   "end_ms": 311222,
+   "text": "Sure, Friday works for me"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 311222,
+   "end_ms": 316504,
+   "text": "Добрый день, коллеги. Давайте коротко обсудим релиз мобильного приложения."
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 317027,
+   "end_ms": 323288,
+   "text": "Добрый день. Сборка почти готова. Осталось поправить экран оплаты и обновить иконки"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 324132,
+   "end_ms": 327321,
+   "text": "Хорошо, когда сможешь показать тестовую версию"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 328215,
+   "end_ms": 334763,
+   "text": "Думаю, к четвергу мне нужен доступ к тестовому серверу, без него я не провею оплату"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 335725,
+   "end_ms": 341462,
+   "text": "Доступ выдам сегодня до вечера. Ещё нужно подготовить описание для магазина-приложений"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 341850,
+   "end_ms": 345985,
+   "text": "Описание напишет Марина, я ей передам скриншоты в среду"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 346677,
+   "end_ms": 352077,
+   "text": "Отлично. огда фиксируем релиз в пятницу, если тесты пройдут без ошибок."
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 352904,
+   "end_ms": 357966,
+   "text": "Договорились. Если что-то сломается, я сразу напишу в общий чат"
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 358979,
+   "end_ms": 361695,
+   "text": "Hi, Tom. Did you finish the quarterly report?"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 362421,
+   "end_ms": 366336,
+   "text": "Almost I still need the sales numbers from Anna."
+  },
+  {
+   "speaker_id": "speaker_3",
+   "start_ms": 366775,
+   "end_ms": 370470,
+   "text": "Okay, I will ask her today. Please send it by Friday"
+  },
+  {
+   "speaker_id": "speaker_4",
+   "start_ms": 371264,
+   "end_ms": 373486,
+   "text": "Sure, Friday worked for me"
+  }
+ ]
+}

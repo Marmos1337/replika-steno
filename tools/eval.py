@@ -37,11 +37,16 @@ def speaker_acc(ref, hyp):
         best = max(best, sum(M[(r, h)] for r, h in zip(rs, perm)))
     return best / total, len(rs), len(hs)
 
-hyp = json.load(open(sys.argv[1])); ref = json.load(open(sys.argv[2]))
-dur = int(sys.argv[sys.argv.index("--duration-ms") + 1]) if "--duration-ms" in sys.argv else None
-errs = check(hyp, dur)
-H, Rf = hyp["transcript"], ref["transcript"]
-w = wer(sum((words(u["text"]) for u in Rf), []), sum((words(u["text"]) for u in H), []))
-acc, nr, nh = speaker_acc(Rf, H)
-print(json.dumps({"schema_ok": not errs, "schema_errors": errs[:5], "utterances": len(H), "WER": round(w, 4),
-                  "speaker_time_accuracy": round(acc, 4), "speakers_ref": nr, "speakers_hyp": nh}, ensure_ascii=False))
+def main():
+    hyp = json.load(open(sys.argv[1])); ref = json.load(open(sys.argv[2]))
+    dur = int(sys.argv[sys.argv.index("--duration-ms") + 1]) if "--duration-ms" in sys.argv else None
+    errs = check(hyp, dur)
+    H, Rf = hyp["transcript"], ref["transcript"]
+    w = wer(sum((words(u["text"]) for u in Rf), []), sum((words(u["text"]) for u in H), []))
+    acc, nr, nh = speaker_acc(Rf, H)
+    print(json.dumps({"schema_ok": not errs, "schema_errors": errs[:5], "utterances": len(H), "WER": round(w, 4),
+                      "speaker_time_accuracy": round(acc, 4), "speakers_ref": nr, "speakers_hyp": nh}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,22 @@
+{
+ "transcript": [
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 30,
+   "end_ms": 2781,
+   "text": "Hi, Tom. Did you finish the quarterly report"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 3456,
+   "end_ms": 14546,
+   "text": "Almost. I still need the sales numbers from Anna. Okay, I will ask her today. Please send it by Friday. Sure, Friday works for me"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 10476,
+   "end_ms": 10965,
+   "text": "it by"
+  }
+ ]
+}

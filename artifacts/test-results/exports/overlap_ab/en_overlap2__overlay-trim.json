@@ -1,0 +1,28 @@
+{
+ "transcript": [
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 51,
+   "end_ms": 3302,
+   "text": "Hi, Tom. Did you finish the quarterly report"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 3302,
+   "end_ms": 6207,
+   "text": "Okay. o. I will"
+  },
+  {
+   "speaker_id": "speaker_1",
+   "start_ms": 6207,
+   "end_ms": 7350,
+   "text": "'ll ask her today"
+  },
+  {
+   "speaker_id": "speaker_2",
+   "start_ms": 7350,
+   "end_ms": 9863,
+   "text": "Please send it by Friday"
+  }
+ ]
+}
