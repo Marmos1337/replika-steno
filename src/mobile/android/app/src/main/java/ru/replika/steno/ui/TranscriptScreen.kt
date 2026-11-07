@@ -68,6 +68,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -150,10 +153,9 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
     // «Нажмите на реплику…» is shown until the first tap on a replica (remembered across launches).
     val hints = remember { context.getSharedPreferences(HINTS_PREFS, Context.MODE_PRIVATE) }
     var hintDone by remember { mutableStateOf(hints.getBoolean(HINT_TAP_DONE, false)) }
-    // The header slot (hint or the background-pass indicator) stays while the screen is open once shown,
-    // so the list never jumps when the pass finishes or the hint goes away.
-    var headerSlot by remember { mutableStateOf(rec.llmPending || !hintDone) }
-    LaunchedEffect(rec.llmPending) { if (rec.llmPending) headerSlot = true }
+    // The hint slot stays while the screen is open once shown, so the list never jumps when the hint goes
+    // away. The background pass has no slot of its own: its spinner sits in the «Итоги» tab.
+    val headerSlot by remember { mutableStateOf(!hintDone) }
     fun tapped() {
         if (hintDone) return
         hintDone = true
@@ -313,11 +315,25 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
                 val header: @Composable () -> Unit = {
                     Header(rec, speakers, side, slot = headerSlot, hint = !hintDone, onRename = { dlg = Dlg.Rename(it) })
                 }
-                val tabs: @Composable () -> Unit = {
-                    Column(Modifier.fillMaxWidth().background(c.bg).padding(horizontal = side, vertical = Space.xs)) {
+                // [stuck]: the header has scrolled away and the tabs are pinned; rows then fade out under them
+                val tabs: @Composable (Boolean) -> Unit = { stuck ->
+                    Column(
+                        Modifier.fillMaxWidth().fadeBelow(c.bg, fadeWhen(stuck)).background(c.bg)
+                            .padding(horizontal = side, vertical = Space.xs),
+                    ) {
                         Segmented(
                             listOf(0, 1), tab, { tab = it },
                             label = { if (it == 0) "Расшифровка" else "Итоги" }, modifier = Modifier.fillMaxWidth(),
+                            badge = { t ->
+                                // formatting and summary are still being built in the background
+                                if (t == 1 && rec.llmPending) {
+                                    Spacer(Modifier.width(Space.s))
+                                    CircularProgressIndicator(
+                                        Modifier.size(Space.m).semantics { contentDescription = "Итоги готовятся" },
+                                        color = c.text, trackColor = c.raised, strokeWidth = 1.5.dp,
+                                    )
+                                }
+                            },
                         )
                         if (tab == 0 && doubts.isNotEmpty()) {
                             DoubtNavigator(
@@ -334,11 +350,13 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
                 Fade(tab, Modifier.fillMaxSize()) { t ->
                     if (t == 0) {
                         LazyColumn(
-                            state = listState, modifier = Modifier.fillMaxSize(),
+                            state = listState,
+                            // rows fade out above the player instead of being cut by its edge
+                            modifier = Modifier.fillMaxSize().edgeFade(c.bg, top = 0f, bottom = fadeWhen(listState.canScrollForward)),
                             contentPadding = PaddingValues(bottom = Space.xxl),
                         ) {
                             item(key = "header") { header() }
-                            stickyHeader(key = "tabs") { tabs() }
+                            stickyHeader(key = "tabs") { tabs(listState.firstVisibleItemIndex > 0) }
                             itemsIndexed(utts, key = { i, _ -> "u$i" }) { i, u ->
                                 UtteranceRow(
                                     rec, u, side,
@@ -451,24 +469,14 @@ private fun Header(rec: Recording, speakers: List<String>, side: Dp, slot: Boole
                 listOf(fmtTime(rec.durationMs), plural(speakers.size, "участник", "участника", "участников"), fmtDate(rec.createdAtMs)).joinToString(" · "),
                 style = Type.labelNum, color = c.muted,
             )
-            // One fixed-height slot: the background pass indicator, or the tap hint until the first tap.
+            // One fixed-height slot for the tap hint until the first tap (it stays empty after that while
+            // the screen is open, so the list does not jump).
             if (slot) {
                 Spacer(Modifier.height(Space.s))
-                val content = when {
-                    rec.llmPending -> 1
-                    hint -> 2
-                    else -> 0
-                }
-                Fade(content, Modifier.fillMaxWidth().height(Size.iconSmall + Space.xs)) { k ->
+                Fade(hint, Modifier.fillMaxWidth().height(Size.iconSmall + Space.xs)) { shown ->
                     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                        when (k) {
-                            1 -> {
-                                CircularProgressIndicator(Modifier.size(Space.l - Space.xs), color = c.text, trackColor = c.raised, strokeWidth = 2.dp)
-                                Spacer(Modifier.width(Space.s))
-                                Text("Оформление и итоги готовятся…", style = Type.label, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                            2 -> Text("Нажмите на реплику, чтобы послушать с этого места", style = Type.label, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            else -> Unit
+                        if (shown) {
+                            Text("Нажмите на реплику, чтобы послушать с этого места", style = Type.label, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -495,7 +503,8 @@ private fun SpeakerChip(name: String, tone: Color, actionLabel: String, onClick:
         contentAlignment = Alignment.Center,
     ) {
         Row(
-            Modifier.height(Space.xxl).clip(Radius.pill).background(tone.copy(alpha = if (c.dark) 0.16f else 0.12f))
+            // neutral fill for every chip (a tinted one reads as «selected»); the tone is only on the dot
+            Modifier.height(Space.xxl).clip(Radius.pill).background(c.raised)
                 .padding(horizontal = Space.m),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -530,40 +539,49 @@ private fun UtteranceRow(
     val bg by animateColorAsState(if (playing) c.playing else c.bg, Motion.spec(Theme.reducedMotion), label = "row")
     val doubtful = u.speakerConfidence?.let { it < LOW_CONFIDENCE } == true
     val tone = c.speakerTone(u.speakerId)
-    // The highlight extends 12dp past the text column, so the ⋮ lines up with the top bar's ⋮.
-    Box(Modifier.fillMaxWidth().padding(horizontal = barInset(side))) {
+    // The highlight extends past the text column; the ⋮ sits at the top bar's button inset, so its
+    // glyph lines up with the top bar's ⋮. On a phone that inset is 0, while the highlight keeps a 4dp
+    // margin from the screen edge, so the ⋮ is shifted out by the difference.
+    val inset = barInset(side)
+    val edge = maxOf(inset, Space.xs)
+    Box(Modifier.fillMaxWidth().padding(horizontal = edge)) {
         Column(
             Modifier.fillMaxWidth().clip(Radius.r14).background(bg)
                 .combinedClickable(onClickLabel = "Слушать с этого места", onClick = onPlay, onLongClick = { menu = true })
-                .padding(start = side - barInset(side), bottom = Space.m),
+                .padding(start = side - edge, bottom = Space.m),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // plain speaker line: colored dot + name (tap to rename) + time (tap to listen)
-                Row(
-                    Modifier.weight(1f, fill = false).heightIn(min = Size.touch).clip(Radius.r8)
-                        .clickable(role = Role.Button, onClickLabel = "Переименовать участника", onClick = onRename)
-                        .padding(end = Space.xs),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(Modifier.size(Size.dot).clip(Radius.pill).background(tone))
-                    Spacer(Modifier.width(Space.s))
-                    Text(rec.label(u.speakerId), style = Type.speaker, color = c.text)
-                }
-                Box(
-                    Modifier.touchTarget().clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "Слушать с ${fmtTime(u.startMs)}", onClick = onPlay)
-                        .padding(horizontal = Space.s),
-                    contentAlignment = Alignment.Center,
-                ) { Text(fmtTime(u.startMs), style = Type.speakerTime, color = if (playing) c.text else c.muted, maxLines = 1) }
-                if (u.lang == "en") {
-                    Text("EN", style = Type.labelNum, color = c.muted, modifier = Modifier.padding(end = Space.s))
-                }
-                if (doubtful) {
+                // speaker line: colored dot + name (tap to rename) + time (tap to listen) + marks; it takes
+                // all the room up to the ⋮, so the ⋮ always stays at the end of the row
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.weight(1f, fill = false).heightIn(min = Size.touch).clip(Radius.r8)
+                            .clickable(role = Role.Button, onClickLabel = "Переименовать участника", onClick = onRename)
+                            .padding(end = Space.xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(Modifier.size(Size.dot).clip(Radius.pill).background(tone))
+                        Spacer(Modifier.width(Space.s))
+                        Text(
+                            rec.label(u.speakerId), style = Type.speaker, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
                     Box(
-                        Modifier.size(Size.touch).clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "Почему под вопросом", onClick = onConfidence),
+                        Modifier.touchTarget().clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "Слушать с ${fmtTime(u.startMs)}", onClick = onPlay)
+                            .padding(horizontal = Space.s),
                         contentAlignment = Alignment.Center,
-                    ) { Icon(Ic.Question, "Говорящий под вопросом", Modifier.size(Size.iconSmall), tint = c.muted) }
+                    ) { Text(fmtTime(u.startMs), style = Type.speakerTime, color = if (playing) c.text else c.muted, maxLines = 1) }
+                    if (u.lang == "en") {
+                        Text("EN", style = Type.labelNum, color = c.muted, modifier = Modifier.padding(end = Space.s))
+                    }
+                    if (doubtful) {
+                        Box(
+                            Modifier.size(Size.touch).clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "Почему под вопросом", onClick = onConfidence),
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(Ic.Question, "Говорящий под вопросом", Modifier.size(Size.iconSmall), tint = c.muted) }
+                    }
                 }
-                Spacer(Modifier.weight(1f))
                 if (u.edited) {
                     Box(
                         Modifier.touchTarget().clip(Radius.pill).clickable(role = Role.Button, onClickLabel = "Показать исходный текст", onClick = onOriginal)
@@ -571,7 +589,7 @@ private fun UtteranceRow(
                         contentAlignment = Alignment.Center,
                     ) { Text("изменено", style = Type.label, color = c.muted, maxLines = 1) }
                 }
-                Box {
+                Box(Modifier.offset(x = edge - inset)) {
                     IconBtn(Ic.More, "Действия с репликой", { menu = true }, tint = c.muted)
                     AppMenu(
                         menu, { menu = false },
@@ -586,7 +604,7 @@ private fun UtteranceRow(
             }
             Text(
                 highlight(u.text, query, if (active) c.matchActive else c.match),
-                style = Type.body, color = c.text, modifier = Modifier.padding(end = side - barInset(side)),
+                style = Type.body, color = c.text, modifier = Modifier.padding(end = side - edge),
             )
         }
     }
@@ -613,16 +631,20 @@ private fun SummaryList(
     state: LazyListState,
     side: Dp,
     header: @Composable () -> Unit,
-    tabs: @Composable () -> Unit,
+    tabs: @Composable (Boolean) -> Unit,
     vm: ReplikaViewModel,
     onJump: (Int) -> Unit,
 ) {
     val c = Theme.colors
     val summary: MeetingSummary? = rec.summary
     val llmOn by vm.llmEnabled.collectAsState()
-    LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = Space.xxl)) {
+    LazyColumn(
+        state = state,
+        modifier = Modifier.fillMaxSize().edgeFade(c.bg, top = 0f, bottom = fadeWhen(state.canScrollForward)),
+        contentPadding = PaddingValues(bottom = Space.xxl),
+    ) {
         item(key = "header") { header() }
-        stickyHeader(key = "tabs") { tabs() }
+        stickyHeader(key = "tabs") { tabs(state.firstVisibleItemIndex > 0) }
         if (summary == null && rec.llmPending) {
             item(key = "skeleton") { SummarySkeleton(side) }
             return@LazyColumn
@@ -677,8 +699,8 @@ private fun SummaryList(
 
 @Composable
 private fun SummaryTitle(text: String, side: Dp) {
-    // the gap above a section is larger than below its title, so each title reads as part of its own card
-    SectionTitle(text, Modifier.padding(start = side, end = side, top = Space.xl, bottom = Space.m))
+    // the gap above a section is clearly larger than below its title, so each title groups with its card
+    SectionTitle(text, Modifier.padding(start = side, end = side, top = Space.xxl, bottom = Space.s))
 }
 
 /** Time chips of the cited utterances; each one opens the transcript there. */
@@ -720,10 +742,13 @@ private fun ActionCard(a: ActionItem, rec: Recording, side: Dp, onJump: (Int) ->
             .padding(start = Space.l, end = Space.l, top = Space.l, bottom = Space.s),
     ) {
         Field("Что сделать", rec.labelText(a.text), strong = true)
-        Spacer(Modifier.height(Space.m))
-        Row(horizontalArrangement = Arrangement.spacedBy(Space.l)) {
-            Field("Кто", a.assignee?.let(rec::labelText), Modifier.weight(1f))
-            Field("Срок", a.due, Modifier.weight(1f))
+        // «Кто» and «Срок» only when the meeting named them; two empty dashes say nothing
+        if (!a.assignee.isNullOrBlank() || !a.due.isNullOrBlank()) {
+            Spacer(Modifier.height(Space.m))
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.l)) {
+                Field("Кто", a.assignee?.let(rec::labelText), Modifier.weight(1f))
+                Field("Срок", a.due, Modifier.weight(1f))
+            }
         }
         Spacer(Modifier.height(Space.s))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -733,7 +758,8 @@ private fun ActionCard(a: ActionItem, rec: Recording, side: Dp, onJump: (Int) ->
             Row(
                 Modifier.touchTarget().clip(Radius.pill)
                     .toggleable(a.confirmed, role = Role.Checkbox, onValueChange = onConfirm)
-                    .padding(horizontal = Space.s),
+                    // no end padding: the label ends on the card's text edge
+                    .padding(start = Space.s),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(

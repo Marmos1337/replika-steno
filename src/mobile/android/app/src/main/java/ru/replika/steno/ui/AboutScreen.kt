@@ -38,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -121,10 +122,15 @@ fun AboutScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            TopBar(leading = if (wide) null else ({ IconBtn(Ic.Menu, "Открыть меню", onMenu) }), side = side, divider = scroll.canScrollBackward)
+            // Wide screens have no menu button, so no empty bar: the content starts level with the drawer's
+            // logo and fades under the top edge. On a phone the hairline under the bar marks that edge.
+            if (!wide) TopBar(leading = { IconBtn(Ic.Menu, "Открыть меню", onMenu) }, side = side, divider = scroll.canScrollBackward)
             Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll)
-                    .padding(horizontal = side).navigationBarsPadding().padding(bottom = Space.xxl),
+                Modifier.weight(1f).fillMaxWidth()
+                    .edgeFade(c.bg, top = if (wide) fadeWhen(scroll.canScrollBackward) else 0f, bottom = 0f)
+                    .verticalScroll(scroll)
+                    .padding(horizontal = side).navigationBarsPadding()
+                    .padding(top = if (wide) Space.s else 0.dp, bottom = Space.xxl),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LogoSquare(Size.touch + Space.s)
@@ -286,9 +292,10 @@ fun AboutScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
 
 @Composable
 private fun Block(title: String, content: @Composable () -> Unit) {
+    // a larger gap above than below, so each title reads as part of its own card
     Spacer(Modifier.height(Space.xxl))
     SectionTitle(title)
-    Spacer(Modifier.height(Space.m))
+    Spacer(Modifier.height(Space.s))
     content()
 }
 

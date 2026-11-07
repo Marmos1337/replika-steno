@@ -8,7 +8,9 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.statusBars
@@ -49,7 +51,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -100,14 +104,20 @@ fun AppShell(vm: ReplikaViewModel) {
         val content = @Composable {
             Column(Modifier.fillMaxSize()) {
                 val live by vm.live.collectAsState()
-                val strip = live?.takeIf { screen != Screen.Live && it.status != LiveStatus.DONE }
+                val running = live?.takeIf { screen != Screen.Live && it.status != LiveStatus.DONE }
+                // Wide screens keep a full-width strip; on a phone the take shows as a pill inside the top
+                // bar, so the screen does not lose another 48dp row to it.
+                val strip = running?.takeIf { wide }
                 // The shell owns the status bar area, so only the strip's own row slides in and out and
                 // the screen below moves with it smoothly; screens never pad for the status bar again.
                 val top by animateColorAsState(if (strip != null) c.nav else c.bg, Motion.spec(Theme.reducedMotion), label = "statusArea")
                 Box(Modifier.fillMaxWidth().background(top).windowInsetsTopHeight(WindowInsets.statusBars))
                 LiveStrip(strip) { vm.navigate(Screen.Live) }
-                Box(Modifier.weight(1f).fillMaxWidth().consumeWindowInsets(WindowInsets.statusBars)) {
-                    ScreenHost(vm, screen, wide, onMenu = { scope.launch { drawer.open() } })
+                val indicator = running?.takeIf { !wide }?.let { LiveIndicator(it) { vm.navigate(Screen.Live) } }
+                CompositionLocalProvider(LocalLiveIndicator provides indicator) {
+                    Box(Modifier.weight(1f).fillMaxWidth().consumeWindowInsets(WindowInsets.statusBars)) {
+                        ScreenHost(vm, screen, wide, onMenu = { scope.launch { drawer.open() } })
+                    }
                 }
             }
         }
@@ -190,10 +200,54 @@ private fun LiveStrip(state: LiveState?, onOpen: () -> Unit) {
                 Spacer(Modifier.width(Space.s))
                 Text(text, style = Type.labelNum, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(Space.s))
-                Text(action, style = Type.label, color = c.muted, maxLines = 1)
-                Icon(Ic.Right, null, Modifier.size(Size.iconSmall), tint = c.muted)
+                Text(action, style = Type.label, color = c.text, maxLines = 1)
+                Icon(Ic.Right, null, Modifier.size(Size.iconSmall), tint = c.text)
             }
             Box(Modifier.fillMaxWidth().height(Size.stroke).background(c.border))
+        }
+    }
+}
+
+/** A live take in progress, shown by [TopBar] as a trailing pill on phones (see [LiveStrip] for wide screens). */
+class LiveIndicator(val state: LiveState, val onOpen: () -> Unit)
+
+val LocalLiveIndicator = compositionLocalOf<LiveIndicator?> { null }
+
+/** Red dot + «03:12» + chevron in the top bar: the take keeps going, one tap brings the live screen back. */
+@Composable
+private fun LivePill(indicator: LiveIndicator?, endGap: Dp) {
+    val c = Theme.colors
+    var last by remember { mutableStateOf(indicator?.state) }
+    if (indicator != null) last = indicator.state
+    AnimatedVisibility(
+        visible = indicator != null,
+        enter = expandHorizontally(Motion.move(Theme.reducedMotion)) + fadeIn(Motion.spec(Theme.reducedMotion)),
+        exit = shrinkHorizontally(Motion.move(Theme.reducedMotion)) + fadeOut(Motion.spec(Theme.reducedMotion, Motion.FAST)),
+    ) {
+        val s = last ?: return@AnimatedVisibility
+        val (text, spoken) = when (s.status) {
+            LiveStatus.STARTING -> "Запуск" to "Включаю микрофон"
+            LiveStatus.RECORDING -> fmtTime(s.elapsedMs) to "Идёт запись, ${fmtTime(s.elapsedMs)}"
+            LiveStatus.PAUSED -> fmtTime(s.elapsedMs) to "Запись на паузе, ${fmtTime(s.elapsedMs)}"
+            LiveStatus.FINISHING, LiveStatus.DONE -> "Сохраняю" to "Завершаю запись"
+            LiveStatus.ERROR -> "Ошибка" to "Запись остановилась"
+        }
+        // 48dp touch row around a 32dp visual pill, like the speaker chips
+        Box(
+            Modifier.padding(end = endGap).height(Size.touch).clip(Radius.pill)
+                .clickable(role = Role.Button, onClickLabel = "Открыть живую запись") { indicator?.onOpen?.invoke() ?: Unit }
+                .semantics { contentDescription = spoken },
+            contentAlignment = Alignment.Center,
+        ) {
+            Row(
+                Modifier.height(Space.xxl).clip(Radius.pill).background(c.raised).padding(start = Space.m, end = Space.s),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                RecDot(s.status, Size.dot)
+                Spacer(Modifier.width(Space.s))
+                Text(text, style = Type.labelNum, color = c.text, maxLines = 1)
+                Icon(Ic.Right, null, Modifier.size(Size.iconSmall), tint = c.text)
+            }
         }
     }
 }
@@ -209,7 +263,11 @@ private fun DrawerPanel(
     onTheme: (ThemeMode) -> Unit,
 ) {
     val c = Theme.colors
-    Column(Modifier.fillMaxHeight().systemBarsPadding().padding(Space.l)) {
+    // The logo row is centred on the same line as the top bar of the screen next to it.
+    Column(
+        Modifier.fillMaxHeight().systemBarsPadding()
+            .padding(start = Space.l, end = Space.l, top = (Size.topBar - Size.touch) / 2, bottom = Space.l),
+    ) {
         // Logo area: the mark sits in the same 48dp slot in both states. Collapsed, the mark itself expands
         // the rail; on press or focus it cross-fades into the expand icon so the action is readable.
         Row(Modifier.fillMaxWidth().height(Size.touch), verticalAlignment = Alignment.CenterVertically) {
@@ -253,7 +311,9 @@ private fun DrawerPanel(
             val next = ThemeMode.entries[(theme.ordinal + 1) % ThemeMode.entries.size]
             IconBtn(themeIcon(theme), "Тема: ${themeLabel(theme)}. Переключить на «${themeLabel(next)}»", { onTheme(next) })
         } else {
-            Text("Тема", style = Type.label, color = c.muted, modifier = Modifier.padding(start = Space.xs))
+            // Two left edges only: containers (items, theme switch) on the panel padding, and icons and
+            // small labels on the item-icon column; the logo is centred on that column too.
+            Text("Тема", style = Type.label, color = c.muted, modifier = Modifier.padding(start = Space.m))
             Spacer(Modifier.height(Space.s))
             Segmented(
                 options = listOf(ThemeMode.LIGHT, ThemeMode.DARK, ThemeMode.SYSTEM),
@@ -264,9 +324,9 @@ private fun DrawerPanel(
                 modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(Space.m))
-            Row(Modifier.padding(start = Space.xs), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Ic.Shield, null, Modifier.size(Size.iconSmall), tint = c.muted)
-                Spacer(Modifier.width(Space.s))
+            Row(Modifier.padding(start = Space.m), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Ic.Shield, null, Modifier.size(Size.icon), tint = c.muted)
+                Spacer(Modifier.width(Space.m))
                 Text("Всё работает на устройстве", style = Type.label, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
@@ -309,7 +369,9 @@ private fun NavItem(icon: ImageVector, label: String, selected: Boolean, collaps
  * Top row of a screen: leading control, optional title, trailing actions.
  * [side] is the screen's content gutter: the 48dp buttons sit so their glyphs line up with the content
  * column edges (the same inset as the ⋮ of utterance rows). [divider] shows a hairline under the bar
- * while content is scrolled beneath it.
+ * while content is scrolled beneath it. [titleVisible] fades the title in and out (a large title in
+ * the content that moves up into the bar once it scrolls away). A live take in progress shows as a
+ * pill before the actions ([LocalLiveIndicator]).
  */
 @Composable
 fun TopBar(
@@ -317,10 +379,12 @@ fun TopBar(
     side: Dp = Space.l,
     divider: Boolean = false,
     title: String? = null,
-    actions: @Composable RowScope.() -> Unit = {},
+    titleVisible: Boolean = true,
+    actions: @Composable RowScope.() -> Unit = NoActions,
 ) {
     val c = Theme.colors
     val line by animateFloatAsState(if (divider) 1f else 0f, Motion.spec(Theme.reducedMotion, Motion.FAST), label = "topDivider")
+    val titleAlpha by animateFloatAsState(if (titleVisible) 1f else 0f, Motion.spec(Theme.reducedMotion), label = "topTitle")
     Box(Modifier.fillMaxWidth().height(Size.topBar)) {
         Row(
             Modifier.fillMaxSize().padding(horizontal = barInset(side)),
@@ -329,16 +393,23 @@ fun TopBar(
             if (leading != null) leading() else Spacer(Modifier.width(Space.m))
             if (title != null) {
                 Text(title, style = Type.heading, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f).padding(horizontal = Space.xs))
+                    modifier = Modifier.weight(1f).padding(horizontal = Space.xs).alpha(titleAlpha))
             } else Spacer(Modifier.weight(1f))
+            // without buttons after it the pill ends on the content gutter, not on the screen edge
+            LivePill(LocalLiveIndicator.current, endGap = if (actions === NoActions) side - barInset(side) else Space.xs)
             Row(horizontalArrangement = Arrangement.spacedBy(0.dp), verticalAlignment = Alignment.CenterVertically, content = actions)
         }
         Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(Size.stroke).alpha(line).background(c.border))
     }
 }
 
-/** Inset of a row of 48dp icon buttons so the buttons' glyphs line up with the content gutter. */
-fun barInset(side: Dp): Dp = (side - Space.m).coerceAtLeast(Space.xs)
+private val NoActions: @Composable RowScope.() -> Unit = {}
+
+/**
+ * Inset of a row of 48dp icon buttons so the buttons' glyphs line up with the content gutter: the
+ * 22dp icon sits 13dp inside its button and its glyph has ~3dp of air of its own.
+ */
+fun barInset(side: Dp): Dp = (side - Space.m - Space.xs).coerceAtLeast(0.dp)
 
 /** Side gutter that keeps the content column at most [Size.contentMax] wide and centered. */
 fun gutter(maxWidth: Dp): Dp = maxOf(Space.l, (maxWidth - Size.contentMax) / 2)

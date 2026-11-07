@@ -67,7 +67,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -123,12 +122,19 @@ private enum class Phase { IDLE, PERMISSION, LIVE, ERROR }
 private const val LEVEL_HISTORY = 96
 private const val LEVEL_TICK_MS = 80L
 
-/** The info line under the header always reserves two lines of text, so the list never moves when it changes. */
-private val INFO_MIN = Type.label.lineHeight.value.dp * 2 + Space.m * 2
+/** The info line under the header is always two lines of text tall, so the list never moves when it changes. */
+private val INFO_HEIGHT = Type.label.lineHeight.value.dp * 2 + Space.m * 2
 private val METER_HEIGHT = 40.dp
+private val METER_HEIGHT_COMPACT = 24.dp
 
-/** Empty states sit a little above the geometric centre of the free space: it reads as centred. */
-private val OPTICAL_CENTER = BiasAlignment(0f, -0.2f)
+/** Below this height (landscape tablets, wide windows) the header folds into one row. */
+private val COMPACT_HEADER_MAX_HEIGHT = 700.dp
+/** The one-row header needs room for the title column, a useful meter and the timer. */
+private val COMPACT_HEADER_MIN_WIDTH = 560.dp
+private val COMPACT_TITLE_WIDTH = 240.dp
+
+/** Empty states hang from the same line in every state, a bit above the middle of the free space. */
+private const val EMPTY_TOP = 0.28f
 
 private const val UI_PREFS = "ui"
 private const val ASKED_NOTIFICATIONS = "asked_notifications"
@@ -157,7 +163,7 @@ fun LiveScreen(vm: ReplikaViewModel) {
     fun granted() = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     var perm by rememberSaveable { mutableStateOf(if (granted()) Perm.GRANTED else Perm.ASK) }
     val prefs = remember { context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE) }
-    val notificationOff = "Уведомления выключены: значка записи в шторке не будет. Запись при этом идёт."
+    val notificationOff = "Уведомления выключены — запись всё равно идёт."
     val notifRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (!ok) localNote = notificationOff
     }
@@ -221,6 +227,7 @@ fun LiveScreen(vm: ReplikaViewModel) {
 
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
+        val compact = maxHeight < COMPACT_HEADER_MAX_HEIGHT && maxWidth >= COMPACT_HEADER_MIN_WIDTH
         val listState = rememberLazyListState()
         val scope = rememberCoroutineScope()
         val reduced = Theme.reducedMotion
@@ -230,13 +237,19 @@ fun LiveScreen(vm: ReplikaViewModel) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             TopBar(leading = { IconBtn(Ic.Back, "К записям", { vm.navigate(Screen.Library) }) }, side = side, title = "Живая запись")
             Column(Modifier.padding(horizontal = side)) {
-                LiveHeader(s, headerText(s, phase, perm, enginesReady, saved))
+                LiveHeader(s, headerText(s, phase, perm, enginesReady, saved), compact)
                 Spacer(Modifier.height(Space.s))
                 InfoLine(info(s, phase, perm, localNote))
-                // the list's top hairline sits apart from the card, not on its border
                 Spacer(Modifier.height(Space.s))
             }
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            // rows fade out under the info card and above the action bar instead of being cut flat
+            Box(
+                Modifier.weight(1f).fillMaxWidth().edgeFade(
+                    c.bg,
+                    top = fadeWhen(hasText && listState.canScrollBackward),
+                    bottom = fadeWhen(hasText && listState.canScrollForward),
+                ),
+            ) {
                 LiveTranscript(
                     lines = lines,
                     partial = partial,
@@ -245,13 +258,9 @@ fun LiveScreen(vm: ReplikaViewModel) {
                     side = side,
                     empty = emptyContent(s, phase, perm, saved),
                 )
-                // hairline under the fixed header while lines scroll beneath it
-                val line by animateFloatAsState(if (hasText && listState.canScrollBackward) 1f else 0f, Motion.spec(reduced, Motion.FAST), label = "liveDivider")
-                Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(Size.stroke).alpha(line).background(c.border))
             }
             BottomBar(
                 side = side,
-                divider = hasText && listState.canScrollForward,
                 top = {
                     FloatingPill(follow && hasText, "К новым репликам") {
                         stick.value = true
@@ -311,55 +320,95 @@ private fun KeepScreenOn(on: Boolean) {
 
 // ---------------------------------------------------------------- header
 
-private data class HeaderText(val title: String, val subtitle: String)
+/** [onDevice]: the line is about privacy (audio stays on the phone) and gets the shield; others get [icon]. */
+private data class HeaderText(val title: String, val subtitle: String, val onDevice: Boolean, val icon: ImageVector = Ic.Info) {
+    val subtitleIcon: ImageVector get() = if (onDevice) Ic.Shield else icon
+}
 
 /** Header, info line and empty state each say something different: no message is shown twice. */
 private fun headerText(s: LiveState?, phase: Phase, perm: Perm, enginesReady: Boolean, saved: Boolean): HeaderText = when (phase) {
-    Phase.IDLE -> HeaderText(
-        "Готово к записи",
-        if (enginesReady) "Распознавание готово · всё на устройстве" else "Готовлю распознавание…",
-    )
-    Phase.PERMISSION -> HeaderText(
-        "Нет доступа к микрофону",
-        if (perm == Perm.DENIED_FOREVER) "Доступ выключен в настройках телефона" else "Нужно разрешение на запись звука",
-    )
-    Phase.ERROR -> HeaderText("Запись остановлена", if (saved) "Записанное сохранено на телефоне" else "Ничего не сохранено")
+    Phase.IDLE -> if (enginesReady) {
+        HeaderText("Готово к записи", "Распознавание готово · всё на устройстве", onDevice = true)
+    } else {
+        HeaderText("Готово к записи", "Готовлю распознавание…", onDevice = false, icon = Ic.Cpu)
+    }
+    // what to do is in the empty state below; the header only says where the sound goes
+    Phase.PERMISSION -> HeaderText("Нет доступа к микрофону", "Звук пишется только в телефон", onDevice = true)
+    Phase.ERROR -> if (saved) {
+        HeaderText("Запись остановлена", "Записанное сохранено на телефоне", onDevice = true)
+    } else {
+        HeaderText("Запись остановлена", "Ничего не сохранено", onDevice = false)
+    }
     Phase.LIVE -> when (s?.status) {
-        LiveStatus.STARTING -> HeaderText("Включаю микрофон", "Звук пишется только в память телефона")
-        LiveStatus.PAUSED -> HeaderText("Пауза", "Микрофон выключен, пауза в запись не входит")
-        LiveStatus.FINISHING, LiveStatus.DONE -> HeaderText("Завершаю…", "Сохраняю запись")
-        else -> HeaderText("Идёт запись", if (s?.modelsReady == true) "Распознаётся на устройстве" else "Звук пишется в память телефона")
+        LiveStatus.STARTING -> HeaderText("Включаю микрофон", "Звук пишется только в память телефона", onDevice = true)
+        LiveStatus.PAUSED -> HeaderText("Пауза", "Микрофон выключен", onDevice = false, icon = Ic.MicOff)
+        LiveStatus.FINISHING, LiveStatus.DONE -> HeaderText("Завершаю…", "Сохраняю запись", onDevice = false, icon = Ic.Records)
+        else -> HeaderText(
+            "Идёт запись",
+            if (s?.modelsReady == true) "Распознаётся на устройстве" else "Звук пишется в память телефона",
+            onDevice = true,
+        )
     }
 }
 
-/** Rec dot + state + timer, the level meter and one status line; the same size in every state. */
+/**
+ * Rec dot + state + timer, the level meter and one status line; the same size in every state.
+ * [compact]: one row (dot, title over subtitle, meter, timer) for screens short on height.
+ */
 @Composable
-private fun LiveHeader(s: LiveState?, text: HeaderText) {
+private fun LiveHeader(s: LiveState?, text: HeaderText, compact: Boolean) {
     val c = Theme.colors
     val status = s?.status
-    AppCard(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            RecDot(status)
-            Spacer(Modifier.width(Space.s))
-            Fade(text.title, Modifier.weight(1f)) { t ->
-                Text(t, style = Type.bodyStrong, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.width(Space.m))
-            Text(
-                fmtTime(s?.elapsedMs ?: 0), style = Type.displayNum,
-                color = if (status == LiveStatus.RECORDING) c.text else c.muted, maxLines = 1,
-                modifier = Modifier.semantics { contentDescription = "Длительность ${fmtTime(s?.elapsedMs ?: 0)}" },
-            )
+    val timer = @Composable {
+        Text(
+            fmtTime(s?.elapsedMs ?: 0), style = Type.displayNum,
+            color = if (status == LiveStatus.RECORDING) c.text else c.muted, maxLines = 1,
+            modifier = Modifier.semantics { contentDescription = "Длительность ${fmtTime(s?.elapsedMs ?: 0)}" },
+        )
+    }
+    val title = @Composable { m: Modifier ->
+        Fade(text.title, m) { t ->
+            Text(t, style = Type.bodyStrong, color = c.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Spacer(Modifier.height(Space.m))
-        LevelMeter(level = s?.level ?: 0f, active = status == LiveStatus.RECORDING, modifier = Modifier.fillMaxWidth().height(METER_HEIGHT))
-        Spacer(Modifier.height(Space.m))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Ic.Shield, null, Modifier.size(Size.iconSmall), tint = c.muted)
-            Spacer(Modifier.width(Space.s))
-            Fade(text.subtitle, Modifier.weight(1f)) { t ->
+    }
+    // icon and words change together, so the icon is part of the cross-fade
+    val subtitle = @Composable { m: Modifier ->
+        Fade(text.subtitle to text.subtitleIcon, m) { (t, icon) ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, Modifier.size(Size.iconSmall), tint = c.muted)
+                Spacer(Modifier.width(Space.s))
                 Text(t, style = Type.label, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+        }
+    }
+    AppCard(Modifier.fillMaxWidth()) {
+        if (compact) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                RecDot(status)
+                Spacer(Modifier.width(Space.s))
+                // fixed width: the meter beside it never stretches or shrinks when the words change
+                Column(Modifier.width(COMPACT_TITLE_WIDTH)) {
+                    title(Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(Space.xs))
+                    subtitle(Modifier.fillMaxWidth())
+                }
+                Spacer(Modifier.width(Space.l))
+                LevelMeter(level = s?.level ?: 0f, active = status == LiveStatus.RECORDING, modifier = Modifier.weight(1f).height(METER_HEIGHT_COMPACT))
+                Spacer(Modifier.width(Space.l))
+                timer()
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                RecDot(status)
+                Spacer(Modifier.width(Space.s))
+                title(Modifier.weight(1f))
+                Spacer(Modifier.width(Space.m))
+                timer()
+            }
+            Spacer(Modifier.height(Space.m))
+            LevelMeter(level = s?.level ?: 0f, active = status == LiveStatus.RECORDING, modifier = Modifier.fillMaxWidth().height(METER_HEIGHT))
+            Spacer(Modifier.height(Space.m))
+            subtitle(Modifier.fillMaxWidth())
         }
     }
 }
@@ -371,7 +420,8 @@ fun RecDot(status: LiveStatus?, size: Dp = Space.m) {
     val recording = status == LiveStatus.RECORDING || status == LiveStatus.STARTING
     val alpha = if (recording && !Theme.reducedMotion) {
         val t = rememberInfiniteTransition(label = "rec")
-        t.animateFloat(1f, 0.3f, infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "recDot").value
+        // to half, not lower: a deeper pulse washes the red out to pink (light) or brown (dark)
+        t.animateFloat(1f, 0.5f, infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "recDot").value
     } else 1f
     val color = when (status) {
         LiveStatus.RECORDING, LiveStatus.STARTING, LiveStatus.ERROR -> c.danger
@@ -436,25 +486,29 @@ private fun info(s: LiveState?, phase: Phase, perm: Perm, localNote: String?): I
     phase == Phase.ERROR -> Info(InfoKind.ERROR, Ic.Alert, s?.error ?: "Запись прервалась.")
     phase == Phase.PERMISSION -> Info(
         InfoKind.CALM, Ic.Info,
-        if (perm == Perm.DENIED_FOREVER) "Без микрофона живая запись невозможна. Импорт готовых файлов работает и так."
-        else "Звук пишется только в память телефона и никуда не отправляется.",
+        // the privacy line is already in the header subtitle; here only what else the user can do
+        if (perm == Perm.DENIED_FOREVER) "Без микрофона живой записи не будет. Импорт файлов работает."
+        else "После остановки — полная обработка: участники и итоги.",
     )
-    s?.micSilenced == true -> Info(InfoKind.WARN, Ic.MicOff, "Микрофон не слышит звук — проверьте, не занят ли он другим приложением")
+    s?.micSilenced == true -> Info(InfoKind.WARN, Ic.MicOff, "Микрофон не слышит звук — возможно, он занят другим приложением")
     // a notice explains why live text stopped or is missing; it goes before the lag warning
     s?.notice != null -> Info(InfoKind.CALM, Ic.Info, s.notice)
     s?.status == LiveStatus.FINISHING && !s.modelsReady -> Info(
-        InfoKind.CALM, Ic.Cpu, "Дожидаюсь загрузки моделей, чтобы распознать последние фразы",
+        InfoKind.CALM, Ic.Cpu, "Жду загрузки моделей, чтобы распознать последние фразы",
     )
     s?.lagging == true && s.status == LiveStatus.RECORDING -> Info(
         InfoKind.WARN, Ic.Alert,
-        "Распознавание отстаёт на ${(s.backlogMs + 500) / 1000} с — звук сохраняется, текст догонит",
+        "Текст отстаёт на ${(s.backlogMs + 500) / 1000} с — звук пишется, текст догонит",
     )
     localNote != null -> Info(InfoKind.CALM, Ic.Info, localNote)
-    s != null -> Info(InfoKind.CALM, Ic.Question, "Голоса предварительные: участники и окончательный текст появятся после завершения", legend = true)
-    else -> Info(InfoKind.CALM, Ic.Info, "После завершения — полная обработка: участники, окончательный текст и итоги.")
+    s != null -> Info(InfoKind.CALM, Ic.Question, "Голоса примерные: участники уточнятся после завершения", legend = true)
+    else -> Info(InfoKind.CALM, Ic.Info, "После остановки — полная обработка: участники и итоги.")
 }
 
-/** One fixed slot under the header: the voices legend by default, warnings and notices in its place. */
+/**
+ * One fixed slot under the header: the voices legend by default, warnings and notices in its place.
+ * Always exactly two lines tall (longer text ends in an ellipsis), so the list below never moves.
+ */
 @Composable
 private fun InfoLine(info: Info) {
     val c = Theme.colors
@@ -463,22 +517,26 @@ private fun InfoLine(info: Info) {
     val key = info.kind to info.icon
     val shown = remember { HashMap<Pair<InfoKind, ImageVector>, Info>() }
     shown[key] = info
-    Fade(key, Modifier.fillMaxWidth().heightIn(min = INFO_MIN)) { k ->
+    Fade(key, Modifier.fillMaxWidth().height(INFO_HEIGHT)) { k ->
         val info = shown[k] ?: info
         val warn = info.kind != InfoKind.CALM
         Row(
-            Modifier.fillMaxWidth().heightIn(min = INFO_MIN).clip(Radius.r14)
+            Modifier.fillMaxWidth().height(INFO_HEIGHT).clip(Radius.r14)
                 .then(if (warn) Modifier.background(c.raised) else Modifier.border(Size.stroke, c.border, Radius.r14))
                 .padding(horizontal = Space.m, vertical = Space.m),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (info.legend) {
-                Box(Modifier.size(Size.iconSmall), contentAlignment = Alignment.Center) { VoiceDot(null) }
+                // a 12dp ring keeps the visual weight of the 18dp icons in the same slot
+                Box(Modifier.size(Size.iconSmall), contentAlignment = Alignment.Center) { VoiceDot(null, Space.m) }
             } else {
                 Icon(info.icon, null, Modifier.size(Size.iconSmall), tint = if (info.kind == InfoKind.ERROR) c.danger else if (warn) c.text else c.muted)
             }
             Spacer(Modifier.width(Space.s))
-            Text(info.text, style = Type.label, color = if (warn) c.text else c.muted, modifier = Modifier.weight(1f))
+            Text(
+                info.text, style = Type.label, color = if (warn) c.text else c.muted, modifier = Modifier.weight(1f),
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -546,8 +604,13 @@ private fun LiveTranscript(
     Fade(hasText, Modifier.fillMaxSize()) { text ->
         if (!text) {
             Fade(empty.key, Modifier.fillMaxSize()) { k ->
-                Box(Modifier.fillMaxSize(), contentAlignment = OPTICAL_CENTER) {
-                    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                // anchored at the top of a fixed region: a title or text of another length grows the
+                // block downwards, so the tile never moves between idle, permission and error
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = maxHeight * EMPTY_TOP),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
                         EmptyStateIcon(shownEmpty[k] ?: empty)
                     }
                 }
@@ -568,7 +631,7 @@ private fun LiveTranscript(
 @Composable
 private fun EmptyStateIcon(e: Empty) {
     val c = Theme.colors
-    Column(Modifier.padding(horizontal = Space.xl, vertical = Space.xl), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(Modifier.padding(start = Space.xl, end = Space.xl, bottom = Space.xl), horizontalAlignment = Alignment.CenterHorizontally) {
         EmptyIcon(e.icon, danger = e.danger)
         Spacer(Modifier.height(Space.l))
         Text(e.title, style = Type.heading, color = c.text, textAlign = TextAlign.Center)
@@ -594,6 +657,8 @@ private suspend fun LazyListState.scrollToEnd(reduced: Boolean) {
 /**
  * Frame of a live row, the same geometry as an utterance of the transcript: a 48dp header line with
  * the speaker dot, name and time, the text under it and a [Space.m] gap below. [mark] is the dot.
+ * The name sits in a slot as wide as «Голос 0» / «Голос …», so the time keeps its place when the phrase
+ * being spoken («Голос …») becomes a confirmed line. [trailing] is a muted note after the time.
  */
 @Composable
 private fun LiveRowFrame(
@@ -603,6 +668,7 @@ private fun LiveRowFrame(
     lang: String,
     provisional: Boolean,
     description: String,
+    trailing: String? = null,
     text: @Composable () -> Unit,
 ) {
     val c = Theme.colors
@@ -610,17 +676,27 @@ private fun LiveRowFrame(
         Row(Modifier.heightIn(min = Size.touch).clearAndSetSemantics { }, verticalAlignment = Alignment.CenterVertically) {
             mark()
             Spacer(Modifier.width(Space.s))
-            Text(label, style = Type.speaker, color = if (provisional) c.muted else c.text, maxLines = 1)
+            Box(contentAlignment = Alignment.CenterStart) {
+                NAME_TEMPLATES.forEach { Text(it, style = Type.speaker, maxLines = 1, modifier = Modifier.alpha(0f)) }
+                Text(label, style = Type.speaker, color = if (provisional) c.muted else c.text, maxLines = 1)
+            }
             Spacer(Modifier.width(Space.m))
             Text(fmtTime(startMs), style = Type.speakerTime, color = c.muted, maxLines = 1)
             if (lang == "en") {
                 Spacer(Modifier.width(Space.s))
                 Text("EN", style = Type.labelNum, color = c.muted)
             }
+            if (trailing != null) {
+                Spacer(Modifier.width(Space.s))
+                Text(trailing, style = Type.label, color = c.muted, maxLines = 1)
+            }
         }
         text()
     }
 }
+
+/** Width templates of the name slot of a live row: a one-digit voice and the phrase still being spoken. */
+private val NAME_TEMPLATES = listOf("Голос 0", "Голос …")
 
 /**
  * One confirmed live line, also used for the draft on the processing screen. The voice dot is hollow:
@@ -641,13 +717,16 @@ internal fun LiveLineRow(line: LiveLine) {
 
 /** Hollow dot in the voice's tone (muted when the voice is unknown): the mark of a provisional speaker. */
 @Composable
-internal fun VoiceDot(speaker: Int?) {
+internal fun VoiceDot(speaker: Int?, size: Dp = Size.dot) {
     val c = Theme.colors
     val tone = if (speaker == null) c.muted else c.speakers[Math.floorMod(speaker - 1, c.speakers.size)]
-    Box(Modifier.size(Size.dot).border(Size.stroke * 1.5f, tone, Radius.pill))
+    Box(Modifier.size(size).border(Size.stroke * 1.5f, tone, Radius.pill))
 }
 
-/** The phrase still being spoken: the row of a line with muted text and a blinking caret. Zero height between phrases. */
+/**
+ * The phrase still being spoken: the row of a line with a muted «Голос …», «распознаётся» after the
+ * time, muted text and a blinking caret. Zero height between phrases.
+ */
 @Composable
 private fun PartialRow(partial: LivePartial?) {
     val c = Theme.colors
@@ -673,11 +752,12 @@ private fun PartialRow(partial: LivePartial?) {
     )
     LiveRowFrame(
         mark = { VoiceDot(null) },
-        label = "Распознаётся…",
+        label = "Голос …",
         startMs = partial.startMs,
         lang = partial.lang,
         provisional = true,
         description = "Распознаётся: ${partial.text}",
+        trailing = "распознаётся",
     ) { Text(text, style = Type.body, color = c.muted, inlineContent = caret) }
 }
 
@@ -699,43 +779,50 @@ private fun ActionBar(
     onClose: () -> Unit,
 ) {
     // one 48dp row in every phase; only its contents cross-fade
-    Fade(phase, Modifier.fillMaxWidth().height(Size.touch)) { p ->
-        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
-            when (p) {
-                Phase.IDLE -> PrimaryButton("Начать запись", onStart, Modifier.fillMaxWidth(), Ic.Mic)
-                Phase.PERMISSION -> if (perm == Perm.DENIED_FOREVER) {
-                    PrimaryButton("Открыть настройки", onSettings, Modifier.fillMaxWidth(), Ic.Settings)
-                } else {
-                    PrimaryButton("Разрешить доступ", onStart, Modifier.fillMaxWidth(), Ic.Mic)
-                }
-                Phase.LIVE -> {
-                    val status = state?.status
-                    val canControl = status == LiveStatus.RECORDING || status == LiveStatus.PAUSED
-                    val paused = status == LiveStatus.PAUSED
-                    PauseButton(paused, enabled = canControl, onClick = if (paused) onResume else onPause)
-                    val ending = status == LiveStatus.FINISHING || status == LiveStatus.DONE
-                    PrimaryButton(
-                        if (ending) "Завершаю…" else "Завершить", onStop, Modifier.weight(1f), Ic.Stop,
-                        enabled = canControl || status == LiveStatus.STARTING,
-                    )
-                    OutlineIcon(Ic.Trash, "Удалить запись", onDiscard, enabled = !ending)
-                }
-                Phase.ERROR -> {
-                    PrimaryButton(if (saved) "Открыть запись" else "Начать заново", if (saved) onOpenSaved else onStart, Modifier.weight(1f), if (saved) Ic.Records else Ic.Mic)
-                    OutlineIcon(Ic.Close, "Закрыть", onClose)
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        // on the narrowest phones the side pills shrink to 48dp, so «Завершить» keeps its full label
+        val sideW = if (maxWidth < NARROW_BAR) Size.touch else Size.touch + Space.xl
+        Fade(phase, Modifier.fillMaxWidth().height(Size.touch)) { p ->
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
+                when (p) {
+                    Phase.IDLE -> PrimaryButton("Начать запись", onStart, Modifier.fillMaxWidth(), Ic.Mic)
+                    Phase.PERMISSION -> if (perm == Perm.DENIED_FOREVER) {
+                        PrimaryButton("Открыть настройки", onSettings, Modifier.fillMaxWidth(), Ic.Settings)
+                    } else {
+                        PrimaryButton("Разрешить доступ", onStart, Modifier.fillMaxWidth(), Ic.Mic)
+                    }
+                    Phase.LIVE -> {
+                        val status = state?.status
+                        val canControl = status == LiveStatus.RECORDING || status == LiveStatus.PAUSED
+                        val paused = status == LiveStatus.PAUSED
+                        PauseButton(paused, enabled = canControl, width = sideW, onClick = if (paused) onResume else onPause)
+                        val ending = status == LiveStatus.FINISHING || status == LiveStatus.DONE
+                        PrimaryButton(
+                            if (ending) "Завершаю…" else "Завершить", onStop, Modifier.weight(1f), Ic.Stop,
+                            enabled = canControl || status == LiveStatus.STARTING,
+                        )
+                        OutlineIcon(Ic.Trash, "Удалить запись", onDiscard, width = sideW, enabled = !ending)
+                    }
+                    Phase.ERROR -> {
+                        PrimaryButton(if (saved) "Открыть запись" else "Начать заново", if (saved) onOpenSaved else onStart, Modifier.weight(1f), if (saved) Ic.Records else Ic.Mic)
+                        OutlineIcon(Ic.Close, "Закрыть", onClose, width = sideW)
+                    }
                 }
             }
         }
     }
 }
 
+/** Content width under which the action bar's side pills shrink to a square touch target. */
+private val NARROW_BAR = 300.dp
+
 /** Outlined pause / continue pill; the glyph morphs between the two bars and the play triangle. */
 @Composable
-private fun PauseButton(paused: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun PauseButton(paused: Boolean, enabled: Boolean, width: Dp, onClick: () -> Unit) {
     val c = Theme.colors
     val label = if (paused) "Продолжить запись" else "Пауза"
     Box(
-        Modifier.height(Size.touch).width(Size.touch + Space.xl).clip(Radius.pill)
+        Modifier.height(Size.touch).width(width).clip(Radius.pill)
             .border(Size.stroke, c.borderStrong, Radius.pill)
             .clickable(enabled = enabled, role = Role.Button, onClickLabel = label, onClick = onClick)
             .semantics { contentDescription = label },
@@ -746,10 +833,10 @@ private fun PauseButton(paused: Boolean, enabled: Boolean, onClick: () -> Unit) 
 }
 
 @Composable
-private fun OutlineIcon(icon: ImageVector, description: String, onClick: () -> Unit, enabled: Boolean = true) {
+private fun OutlineIcon(icon: ImageVector, description: String, onClick: () -> Unit, width: Dp, enabled: Boolean = true) {
     val c = Theme.colors
     Box(
-        Modifier.height(Size.touch).width(Size.touch + Space.xl).clip(Radius.pill)
+        Modifier.height(Size.touch).width(width).clip(Radius.pill)
             .border(Size.stroke, c.borderStrong, Radius.pill)
             .clickable(enabled = enabled, role = Role.Button, onClickLabel = description, onClick = onClick),
         contentAlignment = Alignment.Center,

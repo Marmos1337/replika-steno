@@ -2,7 +2,6 @@ package ru.replika.steno.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,7 +34,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -79,54 +77,63 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
 
     BoxWithConstraints(Modifier.fillMaxSize().background(c.bg)) {
         val side = gutter(maxWidth)
+        // wide screens have no menu button: no empty top bar, the title lines up with the drawer's logo row
+        val bar = !wide
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            TopBar(
-                leading = if (wide) null else ({ IconBtn(Ic.Menu, "Открыть меню", onMenu) }),
-                side = side,
-            )
-            Column(Modifier.padding(horizontal = side)) {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text("Записи", style = Type.display, color = c.text, modifier = Modifier.weight(1f))
-                    if (items.isNotEmpty()) {
-                        Text(plural(items.size, "запись", "записи", "записей"), style = Type.label, color = c.muted,
-                            modifier = Modifier.padding(bottom = Space.xs))
+            if (bar) {
+                // large-title pattern: «Записи» scrolls with the list and moves up into the bar once it is gone
+                TopBar(
+                    leading = { IconBtn(Ic.Menu, "Открыть меню", onMenu) },
+                    side = side,
+                    title = "Записи",
+                    titleVisible = listState.firstVisibleItemIndex > 0,
+                    divider = loaded && items.isNotEmpty() && listState.canScrollBackward,
+                )
+            }
+            val head = @Composable {
+                Column(Modifier.fillMaxWidth().padding(top = if (bar) 0.dp else (Size.topBar - Type.display.lineHeight.value.dp) / 2)) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text("Записи", style = Type.display, color = c.text, modifier = Modifier.weight(1f))
+                        if (items.isNotEmpty()) {
+                            Text(plural(items.size, "запись", "записи", "записей"), style = Type.label, color = c.muted,
+                                modifier = Modifier.padding(bottom = Space.xs))
+                        }
                     }
+                    if (items.isNotEmpty()) {
+                        Spacer(Modifier.height(Space.l))
+                        SearchField(query, { query = it }, "Поиск по названию и тексту", Modifier.fillMaxWidth())
+                    }
+                    // + the list's 8dp item gap = the standard 16dp under the search field
+                    Spacer(Modifier.height(Space.s))
                 }
-                if (items.isNotEmpty()) {
-                    Spacer(Modifier.height(Space.l))
-                    SearchField(query, { query = it }, "Поиск по названию и тексту", Modifier.fillMaxWidth())
-                }
-                Spacer(Modifier.height(Space.l))
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                when {
-                    !loaded -> Unit
-                    // Only the mark, a title and one line; the actions live in the bottom bar, as with a list.
-                    // centred in the space above the bar; scrolls only if the screen is too short
-                    items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
-                            EmptyState(
-                                title = "Пока нет записей",
-                                text = "Начните живую запись встречи — текст пойдёт сразу — или импортируйте готовый файл.",
-                            )
-                        }
-                    }
-                    filtered.isEmpty() -> Column(
-                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        EmptyState("Ничего не нашлось", "Нет записей, где встречается «${query.trim()}».", icon = Ic.Search) {
-                            SecondaryButton("Сбросить поиск", { query = "" }, Modifier.fillMaxWidth())
-                        }
-                    }
-                    else -> LazyColumn(
-                        Modifier.fillMaxSize(),
+                if (loaded && items.isNotEmpty()) {
+                    // One list holds the title, the search field and the cards, so nothing is clipped under a
+                    // fixed header; the search field keeps its focus while the results change.
+                    LazyColumn(
+                        Modifier.fillMaxSize().edgeFade(
+                            c.bg,
+                            // with a bar the hairline under it marks the top edge
+                            top = if (bar) 0f else fadeWhen(listState.canScrollBackward),
+                            bottom = fadeWhen(listState.canScrollForward),
+                        ),
                         state = listState,
-                        // the list ends at the bar's top edge; the last card keeps the standard gap above it
+                        // the last card keeps the standard gap above the action bar
                         contentPadding = PaddingValues(start = side, end = side, bottom = Space.l),
                         verticalArrangement = Arrangement.spacedBy(Space.s),
                     ) {
-                        items(filtered, key = { it.id }) { r ->
+                        item(key = "head", contentType = "head") { head() }
+                        if (filtered.isEmpty()) {
+                            item(key = "none", contentType = "none") {
+                                Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    EmptyState("Ничего не нашлось", "Нет записей, где встречается «${query.trim()}».", icon = Ic.Search) {
+                                        SecondaryButton("Сбросить поиск", { query = "" }, Modifier.fillMaxWidth())
+                                    }
+                                }
+                            }
+                        }
+                        items(filtered, key = { it.id }, contentType = { "card" }) { r ->
                             RecordingRow(
                                 r, job,
                                 onOpen = {
@@ -144,25 +151,35 @@ fun LibraryScreen(vm: ReplikaViewModel, wide: Boolean, onMenu: () -> Unit) {
                             )
                         }
                     }
+                } else {
+                    Column(Modifier.fillMaxSize()) {
+                        Box(Modifier.padding(horizontal = side)) { head() }
+                        if (loaded) {
+                            // Only the mark, a title and one line; the actions live in the bottom bar, as with a list.
+                            // centred in the space above the bar; scrolls only if the screen is too short
+                            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    EmptyState(
+                                        title = "Пока нет записей",
+                                        text = "Начните живую запись встречи — текст пойдёт сразу — или импортируйте готовый файл.",
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
-                // the title and search stay put; the hairline marks where cards scroll beneath them
-                val line by animateFloatAsState(
-                    if (loaded && filtered.isNotEmpty() && listState.canScrollBackward) 1f else 0f,
-                    Motion.spec(Theme.reducedMotion, Motion.FAST), label = "listDivider",
-                )
-                Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(Size.stroke).alpha(line).background(c.border))
             }
 
             // Bottom action bar: the same place in the empty state and with a list. The list ends at its
-            // top edge (nothing slides under it); a hairline shows while there are more cards below.
-            BottomBar(side = side, divider = loaded && filtered.isNotEmpty() && listState.canScrollForward) {
+            // top edge (nothing slides under it) and fades out into it while there are more cards below.
+            BottomBar(side = side) {
                 BoxWithConstraints(Modifier.fillMaxWidth()) {
                     // Live recording leads (it records, keeps the audio and then processes it like an import).
                     // On a phone the import keeps a short label so both fit on one row without clipping.
                     val roomy = maxWidth >= 440.dp
                     val withIcon = maxWidth >= 340.dp
                     Row(horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
-                        PrimaryButton("Живая запись", { vm.navigate(Screen.Live) }, Modifier.weight(1f), Ic.Mic)
+                        PrimaryButton("Живая запись", { vm.navigate(Screen.Live) }, Modifier.weight(1f), if (withIcon) Ic.Mic else null)
                         SecondaryButton(
                             when {
                                 importing -> if (roomy) "Копирую файл…" else "Копирую…"
@@ -227,11 +244,13 @@ private fun RecordingRow(
                         add(plural(r.utterances.asSequence().map { it.speakerId }.distinct().count(), "участник", "участника", "участников"))
                     }
                 }.joinToString(" · ")
-                Text(meta, style = Type.labelNum, color = c.muted)
+                // one line in every card, so all cards have the same height
+                Text(meta, style = Type.labelNum, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.width(Space.s))
+            // a ready recording is the normal case and needs no label; chips mark only what differs
             when (r.state) {
-                RecordingState.READY -> if (r.llmPending) StatusChip("Итоги готовятся", ChipKind.ACTIVE) else StatusChip("Готово", ChipKind.DONE)
+                RecordingState.READY -> if (r.llmPending) StatusChip("Итоги готовятся", ChipKind.ACTIVE)
                 RecordingState.PROCESSING -> StatusChip(
                     if (mine != null) "${(transcriptProgress(mine.progress) * 100).toInt()}%" else "Обработка",
                     ChipKind.ACTIVE,
@@ -243,7 +262,7 @@ private fun RecordingRow(
                     FailureKind.OTHER -> StatusChip("Ошибка", ChipKind.ERROR)
                 }
                 RecordingState.NEW -> StatusChip("В очереди")
-                RecordingState.RECORDING -> StatusChip("Идёт запись", ChipKind.ACTIVE)
+                RecordingState.RECORDING -> StatusChip("Идёт запись", ChipKind.LIVE)
             }
             Box {
                 IconBtn(Ic.More, "Действия с записью", { menu = true }, tint = c.muted)

@@ -143,7 +143,7 @@ object Size {
     val emptyTile = 56.dp
     /** Visual height of small pills (status, time, speaker chips); their touch area stays [touch]. */
     val chip = 28.dp
-    /** Fade above the bottom action bar. */
+    /** Height of the gradient where a list scrolls under a fixed edge (bars, sticky tabs, header cards). */
     val fade = 24.dp
     val iconSmall = 18.dp
     val logo = 40.dp
@@ -177,13 +177,20 @@ object Type {
     val body = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Normal, fontSize = 15.sp, lineHeight = 22.sp)
     val bodyStrong = body.copy(fontWeight = FontWeight.SemiBold)
     val label = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Medium, fontSize = 13.sp, lineHeight = 18.sp)
-    /** Speaker name and time above an utterance. */
-    val speaker = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 14.sp, lineHeight = 20.sp)
-    val speakerTime = speaker.copy(fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum")
     /** Tabular figures for timers and timestamps, so digits do not jitter. */
     val labelNum = label.copy(fontFeatureSettings = "tnum")
     val bodyNum = body.copy(fontFeatureSettings = "tnum")
-    val displayNum = display.copy(fontFeatureSettings = "tnum")
+    /** Speaker name and time above an utterance: body size, so the scale keeps four sizes. */
+    val speaker = bodyStrong
+    val speakerTime = bodyNum
+    /**
+     * Big timers and percentages. Inter, not Artegra: the extended display face puts «1» in a wide
+     * tabular cell, so «00:19» read as «00:1 9».
+     */
+    val displayNum = TextStyle(
+        fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 26.sp, lineHeight = 32.sp,
+        fontFeatureSettings = "tnum",
+    )
 }
 
 /** 150-250 ms ease-out; collapses to an instant change when the system turned animations off. */

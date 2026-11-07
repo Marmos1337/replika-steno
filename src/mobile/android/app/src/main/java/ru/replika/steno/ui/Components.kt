@@ -53,10 +53,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size as GSize
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -258,38 +260,83 @@ fun Modifier.combinedClickableCompat(onClick: () -> Unit, onLongClick: (() -> Un
 
 /**
  * Fixed action bar at the bottom of a screen. It is a sibling of the scrolling content, never drawn
- * over it: the content ends at its top edge, on an opaque strip of the page color. A hairline shows
- * while there is more content below ([divider]), like the one under the top bar.
+ * over it: the content ends at its top edge, on an opaque strip of the page color. The list above
+ * fades out into that edge ([edgeFade]) instead of being cut by a hairline.
  * [top] is an optional slot above the buttons (a «к новым репликам» pill); it keeps a [Space.m] gap.
  */
 @Composable
 fun BottomBar(
     side: Dp,
-    divider: Boolean,
     modifier: Modifier = Modifier,
     top: @Composable ColumnScope.() -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     val c = Theme.colors
-    val line by animateFloatAsState(if (divider) 1f else 0f, Motion.spec(Theme.reducedMotion, Motion.FAST), label = "bottomDivider")
-    Column(modifier.fillMaxWidth().background(c.bg)) {
-        Box(Modifier.fillMaxWidth().height(Size.stroke).alpha(line).background(c.border))
-        Column(
-            Modifier.fillMaxWidth().navigationBarsPadding().padding(start = side, end = side, top = Space.m, bottom = Space.l),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            top()
-            content()
+    Column(
+        modifier.fillMaxWidth().background(c.bg).navigationBarsPadding()
+            .padding(start = side, end = side, top = Space.m, bottom = Space.l),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        top()
+        content()
+    }
+}
+
+/**
+ * Gradient of [color] (the page background) over the top and/or bottom [height] of a scrolling
+ * container, so rows fade out at a fixed edge instead of being sliced flat. [top] and [bottom] are
+ * strengths 0..1; pass [fadeWhen] of the list's canScrollBackward / canScrollForward so a list at rest
+ * is never dimmed. Apply it outside the scroll modifier, so it stays on the viewport edges.
+ */
+fun Modifier.edgeFade(color: Color, top: Float, bottom: Float, height: Dp = Size.fade): Modifier =
+    if (top <= 0f && bottom <= 0f) this else drawWithContent {
+        drawContent()
+        val h = height.toPx().coerceAtMost(size.height / 2f)
+        if (top > 0f) {
+            drawRect(
+                Brush.verticalGradient(listOf(color.copy(alpha = color.alpha * top), color.copy(alpha = 0f)), startY = 0f, endY = h),
+                size = GSize(size.width, h),
+            )
+        }
+        if (bottom > 0f) {
+            drawRect(
+                Brush.verticalGradient(listOf(color.copy(alpha = 0f), color.copy(alpha = color.alpha * bottom)), startY = size.height - h, endY = size.height),
+                topLeft = Offset(0f, size.height - h),
+                size = GSize(size.width, h),
+            )
         }
     }
+
+/**
+ * Gradient of [color] in the [height] just below this element, drawn over whatever lies there: the
+ * edge of a sticky header (tabs) that rows scroll under. Draws nothing at [strength] 0.
+ */
+fun Modifier.fadeBelow(color: Color, strength: Float, height: Dp = Size.fade): Modifier =
+    if (strength <= 0f) this else drawWithContent {
+        drawContent()
+        val h = height.toPx()
+        drawRect(
+            Brush.verticalGradient(listOf(color.copy(alpha = color.alpha * strength), color.copy(alpha = 0f)), startY = size.height, endY = size.height + h),
+            topLeft = Offset(0f, size.height),
+            size = GSize(size.width, h),
+        )
+    }
+
+/** Animated 0..1 strength for [edgeFade]: the fade appears only while there is content beyond that edge. */
+@Composable
+fun fadeWhen(active: Boolean): Float {
+    val f by animateFloatAsState(if (active) 1f else 0f, Motion.spec(Theme.reducedMotion, Motion.FAST), label = "edgeFade")
+    return f
 }
 
 /**
  * Raised pill that brings the reader back to the newest or current text. It takes its own row above
  * the bottom bar (a [BottomBar] top slot, or a row of its own with [topGap]), so it never covers text.
+ * Secondary style (page fill, outline, shadow): the bar below already holds the one black primary.
  */
 @Composable
 fun ColumnScope.FloatingPill(visible: Boolean, text: String, topGap: Boolean = false, onClick: () -> Unit) {
+    val c = Theme.colors
     val reduced = Theme.reducedMotion
     AnimatedVisibility(
         visible = visible,
@@ -297,7 +344,7 @@ fun ColumnScope.FloatingPill(visible: Boolean, text: String, topGap: Boolean = f
         exit = shrinkVertically(Motion.move(reduced)) + fadeOut(Motion.spec(reduced, Motion.FAST)),
     ) {
         Box(Modifier.padding(top = if (topGap) Space.m else 0.dp, bottom = Space.m)) {
-            PrimaryButton(text, onClick, Modifier.shadow(Space.s, Radius.pill), icon = Ic.Down)
+            SecondaryButton(text, onClick, Modifier.shadow(Space.s, Radius.pill).background(c.bg, Radius.pill), icon = Ic.Down)
         }
     }
 }
@@ -312,8 +359,11 @@ fun Hairline(modifier: Modifier = Modifier) {
     Box(modifier.fillMaxWidth().height(Size.stroke).background(Theme.colors.border))
 }
 
-/** NEUTRAL: waiting/stopped (grey dot); ACTIVE: in progress (text-colored dot); DONE: check mark; ERROR: red dot. */
-enum class ChipKind { NEUTRAL, ACTIVE, DONE, ERROR }
+/**
+ * NEUTRAL: waiting/stopped (grey dot); ACTIVE: in progress (text-colored dot); DONE: check mark;
+ * ERROR: red dot; LIVE: a take is recording (the same red as the recording dot everywhere else).
+ */
+enum class ChipKind { NEUTRAL, ACTIVE, DONE, ERROR, LIVE }
 
 /** Non-interactive status pill; fixed [Size.chip] height so chips of every kind line up. */
 @Composable
@@ -331,7 +381,7 @@ fun StatusChip(text: String, kind: ChipKind = ChipKind.NEUTRAL, modifier: Modifi
                 Modifier.size(Size.dot).clip(Radius.pill).background(
                     when (kind) {
                         ChipKind.ACTIVE -> c.text
-                        ChipKind.ERROR -> c.danger
+                        ChipKind.ERROR, ChipKind.LIVE -> c.danger
                         else -> c.muted
                     },
                 ),
@@ -345,7 +395,10 @@ fun StatusChip(text: String, kind: ChipKind = ChipKind.NEUTRAL, modifier: Modifi
 /** Gives a small control a touch area of at least [Size.touch] in both directions. */
 fun Modifier.touchTarget(): Modifier = this.defaultMinSize(minWidth = Size.touch, minHeight = Size.touch)
 
-/** Equal-width segmented control; the selected pill slides between options. */
+/**
+ * Equal-width segmented control; the selected pill slides between options. [badge] draws an optional
+ * small mark after an option's label (a spinner while that tab's content is still being built).
+ */
 @Composable
 fun <T> Segmented(
     options: List<T>,
@@ -355,6 +408,7 @@ fun <T> Segmented(
     modifier: Modifier = Modifier,
     icon: ((T) -> ImageVector)? = null,
     iconsOnly: Boolean = false,
+    badge: (@Composable (T) -> Unit)? = null,
 ) {
     val c = Theme.colors
     val reduced = Theme.reducedMotion
@@ -386,6 +440,7 @@ fun <T> Segmented(
                         if (icon != null) Spacer(Modifier.width(Space.s))
                         Text(label(o), style = Type.label, color = if (sel) c.text else c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
+                    badge?.invoke(o)
                 }
             }
         }

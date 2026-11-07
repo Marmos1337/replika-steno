@@ -98,7 +98,8 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
             // Fixed-size area between the top bar and the buttons; states cross-fade inside it.
             // A lazy list, so a long live draft (thousands of lines) below the progress stays cheap.
             LazyColumn(
-                Modifier.weight(1f).fillMaxWidth(),
+                // under the top bar a hairline marks the edge (as on About); above the action bar rows fade out
+                Modifier.weight(1f).fillMaxWidth().edgeFade(c.bg, top = 0f, bottom = fadeWhen(scroll.canScrollForward)),
                 state = scroll,
                 contentPadding = PaddingValues(start = side, end = side, bottom = Space.l),
             ) {
@@ -134,7 +135,7 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
                 }
             }
             // One 48dp row of actions in every state (as on the live screen), only its contents cross-fade.
-            BottomBar(side = side, divider = scroll.canScrollForward) {
+            BottomBar(side = side) {
                 Fade(view, Modifier.fillMaxWidth().height(Size.touch)) { v ->
                     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(Space.s), verticalAlignment = Alignment.CenterVertically) {
                         when (v) {
@@ -165,8 +166,8 @@ fun ProcessingScreen(vm: ReplikaViewModel, id: String) {
 @Composable
 private fun DraftTitle() {
     val c = Theme.colors
-    // the standard gap between sections; the rows below bring their own 48dp header line
-    Column(Modifier.fillMaxWidth().padding(top = Space.xl)) {
+    // a section gap above, so the title groups with the rows below it (they bring their own 48dp header line)
+    Column(Modifier.fillMaxWidth().padding(top = Space.xxl)) {
         SectionTitle("Черновик живой записи")
         Spacer(Modifier.height(Space.xs))
         Text(
@@ -192,17 +193,14 @@ private fun RunningView(job: ActiveJob?, startedAt: Long?) {
     val preparing = note != null && stage == Stage.DECODE
 
     AppCard(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text("${(overall * 100).toInt()}%", style = Type.displayNum, color = c.text, modifier = Modifier.weight(1f))
-            Text(if (startedAt != null) fmtTime(now - startedAt) else "00:00", style = Type.labelNum, color = c.muted,
-                modifier = Modifier.padding(bottom = Space.xs))
-        }
+        Text("${(overall * 100).toInt()}%", style = Type.displayNum, color = c.text)
         Spacer(Modifier.height(Space.m))
         ProgressLine(overall)
         Spacer(Modifier.height(Space.m))
+        // the stage itself is named in the list below; the caption says how long it has been going
         Text(
-            note ?: stage?.title ?: "Запускаю…",
-            style = Type.label, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            note ?: if (startedAt != null) "прошло ${fmtTime(now - startedAt)}" else "Запускаю…",
+            style = Type.labelNum, color = c.muted, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
     }
     Spacer(Modifier.height(Space.m))
