@@ -16,6 +16,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -81,6 +82,13 @@ class AppGraph(private val context: Context) {
     val live: StateFlow<LiveState?> = liveSession
         .flatMapLatest { it?.state ?: flowOf(null) }
         .stateIn(scope, SharingStarted.Eagerly, null)
+
+    /**
+     * The same as [live], read straight from the current session on subscription. [live] is updated on
+     * another dispatcher and may still be null right after [startLive]; the recording service must
+     * not take that for "no session" and stop itself.
+     */
+    val liveNow: Flow<LiveState?> get() = liveSession.flatMapLatest { it?.state ?: flowOf(null) }
 
     /** True while a live session is recording, paused or finishing. */
     val liveActive: Boolean get() = liveSession.value?.active == true
@@ -155,14 +163,18 @@ class AppGraph(private val context: Context) {
         scope.launch { s.finish() }
     }
 
-    /** Throws the take away: nothing is saved. */
-    fun discardLive() {
-        val s = liveSession.value ?: return
-        scope.launch {
-            s.discard()
-            // a discard pressed while starting completes inside start(); the session clears itself then
-            if (liveSession.value === s && !s.active) liveSession.value = null
-        }
+    /**
+     * Throws the take away: nothing is saved. Returns false when there was nothing to discard or the
+     * take was already being saved (Stop came first), so the caller never reports a deletion that did
+     * not happen.
+     */
+    suspend fun discardLive(): Boolean {
+        val s = liveSession.value ?: return false
+        if (s.state.value.status == ru.replika.steno.core.live.LiveStatus.FINISHING) return false
+        val done = withContext(NonCancellable) { s.discard() }
+        // a discard pressed while starting completes inside start(); the session clears itself then
+        if (liveSession.value === s && !s.active) liveSession.value = null
+        return done
     }
 
     /** Forgets a finished or failed session (the UI has shown its result). */
@@ -179,11 +191,21 @@ class AppGraph(private val context: Context) {
     private fun onLiveClosed(session: LiveSession, recordingId: String?) {
         // a discarded take leaves nothing to show
         if (recordingId == null && session.state.value.status == ru.replika.steno.core.live.LiveStatus.DONE && liveSession.value === session) liveSession.value = null
-        if (recordingId != null) start(recordingId) // busy -> stays NEW and the queue picks it up
+        if (recordingId != null) launchJob(recordingId) // busy -> stays NEW and the queue picks it up
         if (running?.isActive != true) releaseWhenIdle()
     }
 
+    /**
+     * Processes a recording that is NEW. While a live take is recording, paused or finishing, it stays
+     * NEW and the queue (ReplikaViewModel) starts it after the take, so live recognition never competes
+     * with a new import for the recognizer.
+     */
     fun start(recordingId: String) {
+        if (liveActive) { Log.i(TAG, "start ${recordingId.take(8)} deferred: live recording"); return }
+        launchJob(recordingId)
+    }
+
+    private fun launchJob(recordingId: String) {
         if (running?.isActive == true) { Log.i(TAG, "start ${recordingId.take(8)} ignored: busy"); return }
         Log.i(TAG, "start ${recordingId.take(8)}")
         running = scope.launch { process(recordingId) }

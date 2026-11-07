@@ -4,18 +4,22 @@ import java.io.File
 import kotlin.math.roundToInt
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.replika.steno.core.AsrResult
+import ru.replika.steno.core.DecodedAudio
 import ru.replika.steno.core.Recognizer
 import ru.replika.steno.core.Recording
 import ru.replika.steno.core.live.AudioRing
 import ru.replika.steno.core.live.LatencyStats
 import ru.replika.steno.core.live.LiveClock
 import ru.replika.steno.core.live.LiveConfig
+import ru.replika.steno.core.live.LiveLimits
 import ru.replika.steno.core.live.LiveLine
 import ru.replika.steno.core.live.LiveMetrics
+import ru.replika.steno.core.live.LiveState
 import ru.replika.steno.core.live.LiveTranscriber
 import ru.replika.steno.core.live.OnlineSpeakers
 import ru.replika.steno.core.live.StreamingVad
@@ -303,5 +307,71 @@ class LiveTest {
         val o = RecordingStore.fromJson(old)
         assertTrue(o.liveDraft.isEmpty())
         assertNull(o.liveMetrics)
+    }
+
+    @Test fun backlogCountsFromModelsReadyNotFromCaptureStart() {
+        val clock = FakeClock()
+        val t = LiveTranscriber(clock)
+        // 12 s recorded while the models load: no recognition yet, so nothing is "behind"
+        repeat(120) { i -> clock.now += 100; t.accept(chunk(i, (i % 20) < 15)) }
+        assertEquals(0L, t.state.value.backlogMs)
+        assertFalse(t.state.value.lagging)
+        assertEquals(0L, t.metrics().maxBacklogMs)
+        // models ready: the queued 12 s are worked off quickly; the warning threshold is never crossed
+        t.bind(FakeVad(), FakeAsr(clock) { it / 20 }, null)
+        while (t.step() != LiveTranscriber.Step.IDLE) Unit
+        assertTrue("max backlog ${t.metrics().maxBacklogMs}", t.metrics().maxBacklogMs < LiveState.LAG_WARN_MS)
+        assertFalse(t.state.value.lagging)
+    }
+
+    @Test fun lagWarningNeedsRunningRecognitionAndNoNotice() {
+        val behind = LiveState(backlogMs = LiveState.LAG_WARN_MS + 1_000)
+        assertFalse(behind.lagging) // models still loading
+        assertTrue(behind.copy(modelsReady = true).lagging)
+        assertFalse(behind.copy(modelsReady = true, notice = "Распознавание на лету остановилось").lagging)
+    }
+
+    @Test fun speedCountsOnlyAudioTheWorkerTook() {
+        val clock = FakeClock()
+        val t = LiveTranscriber(clock, LiveConfig(maxQueueMs = 1_000))
+        t.bind(FakeVad(), FakeAsr(clock) { 10 }, null)
+        // 2 s arrive at once: 1 s queued, 1 s skipped; then 1 s more after the worker caught up
+        repeat(20) { i -> t.accept(chunk(i, true)) }
+        while (t.step() != LiveTranscriber.Step.IDLE) Unit
+        repeat(10) { i -> t.accept(chunk(20 + i, true)) }
+        t.finish()
+        while (t.step() != LiveTranscriber.Step.ENDED) Unit
+        val m = t.metrics()
+        assertEquals(1_000L, m.droppedAudioMs)
+        // the clock only moves inside decodes, so the worker was busy for exactly clock.now ms
+        assertEquals(2_000f / clock.now, m.speedX!!, 1e-4f)
+    }
+
+    @Test fun liveTakeNeverExceedsTheDecoderCap() {
+        val cap = DecodedAudio.MAX_DURATION_MS * DecodedAudio.SAMPLE_RATE / 1000
+        assertEquals(cap - LiveLimits.BLOCK, LiveLimits.MAX_SAMPLES)
+        // whole blocks until the cap, then the part that fits, then nothing - also for a late extra block
+        assertEquals(1_600, LiveLimits.fit(0, 1_600))
+        assertEquals(1_000, LiveLimits.fit(LiveLimits.MAX_SAMPLES - 1_000, 1_600))
+        assertEquals(0, LiveLimits.fit(LiveLimits.MAX_SAMPLES, 1_600))
+        assertEquals(0, LiveLimits.fit(LiveLimits.MAX_SAMPLES + 5, 1_600))
+        var written = LiveLimits.MAX_SAMPLES - 2 * 1_600 - 700
+        repeat(5) { written += LiveLimits.fit(written, 1_600) }
+        assertEquals(LiveLimits.MAX_SAMPLES, written)
+        assertTrue(written * 1000 / DecodedAudio.SAMPLE_RATE < DecodedAudio.MAX_DURATION_MS)
+    }
+
+    @Test fun repairCutsATakeLongerThanTheCap() {
+        val f = File.createTempFile("live", ".wav")
+        try {
+            WavWriter(f).use { w -> w.write(ShortArray(5_000)) }
+            java.io.RandomAccessFile(f, "rw").use { it.seek(it.length()); it.write(1) } // torn last sample
+            assertEquals(3_000L, WavFile.repair(f, maxSamples = 3_000))
+            assertEquals(6_000L, WavFile.declaredDataBytes(f))
+            assertEquals(44L + 6_000, f.length())
+            assertEquals(3_000L, WavFile.repair(f, maxSamples = 10_000)) // under the cap: unchanged
+        } finally {
+            f.delete()
+        }
     }
 }

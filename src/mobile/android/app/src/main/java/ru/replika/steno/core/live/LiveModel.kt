@@ -104,7 +104,10 @@ data class LiveState(
     val level: Float = 0f,
     val lines: List<LiveLine> = emptyList(),
     val partial: LivePartial? = null,
-    /** Captured audio not yet covered by any decode. Above [LAG_WARN_MS] the UI says the phone is behind. */
+    /**
+     * Captured audio not yet covered by any decode, counted from the moment the models were ready.
+     * Above [LAG_WARN_MS] the UI says the phone is behind.
+     */
     val backlogMs: Long = 0,
     /** False while the speech models are still loading (audio is already being recorded). */
     val modelsReady: Boolean = false,
@@ -118,7 +121,11 @@ data class LiveState(
     /** Debug runs paced from a file instead of the microphone. */
     val fromFile: Boolean = false,
 ) {
-    val lagging: Boolean get() = backlogMs > LAG_WARN_MS
+    /**
+     * Recognition runs but is behind. Never while the models load or after recognition stopped with a
+     * [notice]: then there is nothing to catch up with, and the notice says why there is no text.
+     */
+    val lagging: Boolean get() = modelsReady && notice == null && backlogMs > LAG_WARN_MS
 
     companion object {
         const val LAG_WARN_MS = 4_000L

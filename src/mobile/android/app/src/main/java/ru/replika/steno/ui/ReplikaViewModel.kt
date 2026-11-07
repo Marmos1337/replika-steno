@@ -213,9 +213,13 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
 
     fun delete(id: String) {
         if (isLiveRecording(id)) {
+            if (graph.live.value?.status == LiveStatus.FINISHING) {
+                // the take is being saved; it can be deleted like any recording once it is processed
+                toast(LIVE_SAVING)
+                return
+            }
             // the take in progress: throw it away through the session, which owns the file
-            graph.discardLive()
-            toast("Запись удалена")
+            viewModelScope.launch { toast(if (graph.discardLive()) "Запись удалена" else LIVE_SAVING) }
             return
         }
         viewModelScope.launch {
@@ -316,7 +320,10 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
     fun pauseLive() = graph.pauseLive()
     fun resumeLive() = graph.resumeLive()
     fun stopLive() = graph.stopLive()
-    fun discardLive() = graph.discardLive()
+    /** The live screen's «Удалить»: leaves to the library and says what actually happened. */
+    fun discardLive() {
+        viewModelScope.launch { toast(if (graph.discardLive()) "Запись удалена" else LIVE_SAVING) }
+    }
     /** After a DONE / ERROR state was shown; DONE also has the recording id to open its processing screen. */
     fun dismissLive() = graph.dismissLive()
 
@@ -327,6 +334,7 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
 
     companion object {
         private const val KEY_SCREEN = "screen"
+        private const val LIVE_SAVING = "Запись сохраняется — удалить её можно после обработки"
 
         fun exportName(rec: Recording, format: ExportFormat): String =
             rec.title.replace(Regex("[\\\\/:*?\"<>|\\n\\r]"), "_").trim().ifBlank { "transcript" }.take(80) + "." + format.ext

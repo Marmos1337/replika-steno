@@ -57,7 +57,8 @@ class LiveRecordingService : Service() {
         wakeLock = getSystemService(PowerManager::class.java)?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "replika:live")
             ?.apply { acquire(3 * 60 * 60 * 1000L) }
         scope.launch {
-            graph.live.collect { s ->
+            // read from the session itself: graph.live may still be null this early and would stop the service
+            graph.liveNow.collect { s ->
                 if (s == null || s.status.terminal) { stopSelf(); return@collect }
                 val key = s.status to s.elapsedMs / 1000
                 if (key != shown) {

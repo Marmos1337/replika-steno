@@ -80,6 +80,11 @@ class LiveTranscriber(
     @Volatile private var captured = 0L
     @Volatile private var dropped = 0L
     @Volatile private var startedAtMs = -1L
+    /**
+     * Captured position when the engines arrived, -1 before. The backlog counts from here: while the
+     * models load there is no recognition to be behind, the screen says the models are loading.
+     */
+    @Volatile private var boundAt = -1L
     private var level = 0f
     private val maxBacklog = AtomicLong()
     private val maxQueue = AtomicInteger()
@@ -108,6 +113,8 @@ class LiveTranscriber(
     @Volatile private var firstTextAtMs = -1L
     private var decodeMs = 0L
     private var decodedSamples = 0L
+    /** Audio the worker actually took from the queue (a skipped stretch after an overflow is not in it). */
+    private var consumedSamples = 0L
     private var busyMs = 0L
     private var partials = 0
     private var finals = 0
@@ -121,6 +128,7 @@ class LiveTranscriber(
         this.vad = vad
         this.recognizer = recognizer
         this.voices = voices
+        boundAt = captured
         _state.update { it.copy(modelsReady = true) }
     }
 
@@ -141,7 +149,7 @@ class LiveTranscriber(
             maxQueue.accumulateAndGet(queuedChunks.incrementAndGet(), ::maxOf)
         }
         level = smooth(level, rmsLevel(block))
-        val backlog = samplesToMs(captured - covered)
+        val backlog = backlogMs()
         maxBacklog.accumulateAndGet(backlog, ::maxOf)
         val lv = level
         _state.update { it.copy(elapsedMs = samplesToMs(captured), level = lv, backlogMs = backlog) }
@@ -190,6 +198,7 @@ class LiveTranscriber(
         }
         ring.write(a.samples)
         vadPos += a.samples.size
+        consumedSamples += a.samples.size
         stamps.addLast(longArrayOf(vadPos, a.capturedAtMs))
         while (stamps.size > 1 && stamps.first()[0] < ring.start) stamps.removeFirst()
 
@@ -304,6 +313,13 @@ class LiveTranscriber(
         covered = if (inSpeech) maxOf(onset, lastPartialEnd, lastFinalEnd).coerceAtMost(vadPos) else vadPos
     }
 
+    /** Captured audio not yet covered by a decode, counted from [bind]; 0 while the models load. */
+    private fun backlogMs(): Long {
+        val from = boundAt
+        if (from < 0) return 0
+        return samplesToMs((captured - maxOf(covered, from)).coerceAtLeast(0))
+    }
+
     private fun captureTimeOf(sample: Long): Long {
         for (s in stamps) if (s[0] > sample) return s[1]
         return stamps.lastOrNull()?.get(1) ?: clock.nowMs()
@@ -316,7 +332,7 @@ class LiveTranscriber(
     private fun publish() {
         val l = lines.toList()
         val p = partial
-        val backlog = samplesToMs(captured - covered)
+        val backlog = backlogMs()
         maxBacklog.accumulateAndGet(backlog, ::maxOf)
         val m = metrics()
         _state.update { it.copy(lines = l, partial = p, backlogMs = backlog, metrics = m) }
@@ -330,7 +346,7 @@ class LiveTranscriber(
         latencyP95Ms = latency.percentile(0.95),
         latencyCount = latency.count,
         decodeRtf = if (decodedSamples > 0) decodeMs.toFloat() / samplesToMs(decodedSamples).coerceAtLeast(1) else null,
-        speedX = if (busyMs > 0) samplesToMs(vadPos).toFloat() / busyMs else null,
+        speedX = if (busyMs > 0) samplesToMs(consumedSamples).toFloat() / busyMs else null,
         maxBacklogMs = maxBacklog.get(),
         maxQueueChunks = maxQueue.get(),
         peakPssMb = peakPssMb,

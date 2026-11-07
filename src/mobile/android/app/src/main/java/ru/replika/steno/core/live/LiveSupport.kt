@@ -1,7 +1,20 @@
 package ru.replika.steno.core.live
 
 import kotlin.math.ceil
+import ru.replika.steno.core.DecodedAudio
 import ru.replika.steno.diar.Clustering
+
+/**
+ * Length cap of a live take. One 100 ms block under the decoder's 2.5 h limit, so a saved live WAV
+ * (also one repaired after a crash) is always accepted by the normal pipeline.
+ */
+object LiveLimits {
+    const val BLOCK = DecodedAudio.SAMPLE_RATE / 10
+    const val MAX_SAMPLES: Long = DecodedAudio.MAX_DURATION_MS * DecodedAudio.SAMPLE_RATE / 1000 - BLOCK
+
+    /** How many samples of a [size]-sample block still fit after [written] samples. */
+    fun fit(written: Long, size: Int, max: Long = MAX_SAMPLES): Int = (max - written).coerceIn(0, size.toLong()).toInt()
+}
 
 /**
  * The last [capacity] samples of the stream, addressed by absolute sample index. The engine keeps

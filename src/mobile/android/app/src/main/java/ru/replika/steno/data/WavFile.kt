@@ -87,14 +87,17 @@ object WavFile {
     }
 
     /**
-     * Makes the header match the data actually on disk (a crash leaves it at the last sync) and drops
-     * a trailing odd byte. Returns the number of samples, or null when the file is not our WAV.
+     * Makes the header match the data actually on disk (a crash leaves it at the last sync), drops
+     * a trailing odd byte and cuts anything past [maxSamples]. Returns the number of samples, or null
+     * when the file is not our WAV.
      */
-    fun repair(file: File): Long? {
+    fun repair(file: File, maxSamples: Long = Long.MAX_VALUE): Long? {
         declaredDataBytes(file) ?: return null
         RandomAccessFile(file, "rw").use { raf ->
             var data = raf.length() - HEADER
-            if (data % 2 != 0L) { data--; raf.setLength(HEADER + data) }
+            if (data % 2 != 0L) data--
+            if (data / 2 > maxSamples) data = maxSamples * 2
+            if (raf.length() != HEADER + data) raf.setLength(HEADER + data)
             writeSizes(raf, data)
             return data / 2
         }

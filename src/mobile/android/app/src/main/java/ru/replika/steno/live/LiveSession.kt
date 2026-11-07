@@ -20,6 +20,7 @@ import ru.replika.steno.core.DecodedAudio
 import ru.replika.steno.core.Recognizer
 import ru.replika.steno.core.RecordingState
 import ru.replika.steno.core.live.LiveClock
+import ru.replika.steno.core.live.LiveLimits
 import ru.replika.steno.core.live.LiveState
 import ru.replika.steno.core.live.LiveStatus
 import ru.replika.steno.core.live.LiveTranscriber
@@ -58,9 +59,12 @@ class LiveSession(
     private var wav: WavWriter? = null
     private var recordingId: String? = null
     private val ending = AtomicBoolean(false)
-    private val limitHit = AtomicBoolean(false)
+    /** Set once the WAV takes no more audio (length cap reached or the disk is full). */
+    private val sealed = AtomicBoolean(false)
     /** Stop or discard pressed before capture was up: carried out as soon as [start] gets there. */
     @Volatile private var pendingEnd: Boolean? = null
+    /** The reason of a forced stop that came while starting; [start] passes it on to [finish]. */
+    @Volatile private var pendingError: String? = null
 
     /** True until the session is over (also while finishing). */
     val active: Boolean get() = !state.value.status.terminal
@@ -88,7 +92,7 @@ class LiveSession(
         scope.launch { samplePss() }
         when (pendingEnd) {
             true -> discard()
-            false -> finish()
+            false -> finish(pendingError)
             null -> Unit
         }
     }
@@ -124,15 +128,22 @@ class LiveSession(
     private val sink = object : LiveAudioSource.Sink {
         override fun onAudio(block: ShortArray) {
             val w = wav ?: return
-            try {
-                w.write(block)
-            } catch (e: IOException) {
-                Log.e(TAG, "live: wav write failed", e)
-                scope.launch { finish("Не хватило места на устройстве. Записанное до этого момента сохранено.") }
-                return
+            // the mic thread may still deliver a block after the cap (it was blocked in read): it is dropped
+            if (sealed.get()) return
+            val n = LiveLimits.fit(w.samples, block.size)
+            if (n > 0) {
+                try {
+                    w.write(block, n)
+                } catch (e: IOException) {
+                    Log.e(TAG, "live: wav write failed", e)
+                    if (sealed.compareAndSet(false, true)) {
+                        scope.launch { finish("Не хватило места на устройстве. Записанное до этого момента сохранено.") }
+                    }
+                    return
+                }
+                transcriber.accept(FloatArray(n) { block[it] / 32768f })
             }
-            transcriber.accept(FloatArray(block.size) { block[it] / 32768f })
-            if (w.samples >= MAX_SAMPLES && limitHit.compareAndSet(false, true)) {
+            if (w.samples >= LiveLimits.MAX_SAMPLES && sealed.compareAndSet(false, true)) {
                 transcriber.update { it.copy(notice = "Достигнут предел записи 2,5 часа. Запись остановлена.") }
                 scope.launch { finish() }
             }
@@ -168,7 +179,11 @@ class LiveSession(
      */
     suspend fun finish(error: String? = null) {
         if (state.value.status == LiveStatus.STARTING) {
-            if (pendingEnd == null) pendingEnd = false
+            if (pendingEnd == null) {
+                // the error text goes first: start() reads it once it sees the flag
+                pendingError = error
+                pendingEnd = false
+            }
             // start() reads the flag after leaving STARTING: either it sees it, or we see the new status
             if (state.value.status == LiveStatus.STARTING) return
         }
@@ -203,13 +218,17 @@ class LiveSession(
         }
     }
 
-    /** Drops the take: nothing is kept. */
-    suspend fun discard() {
+    /**
+     * Drops the take: nothing is kept. Returns false when the session was already ending (Stop came
+     * first): then the recording is saved and goes on to processing as usual.
+     * A discard pressed while starting returns true and is carried out by [start].
+     */
+    suspend fun discard(): Boolean {
         if (state.value.status == LiveStatus.STARTING) {
             pendingEnd = true
-            if (state.value.status == LiveStatus.STARTING) return
+            if (state.value.status == LiveStatus.STARTING) return true
         }
-        if (!ending.compareAndSet(false, true)) return
+        if (!ending.compareAndSet(false, true)) return false
         withContext(NonCancellable) {
             withContext(Dispatchers.IO) { source.stop() }
             workerJob?.cancel()
@@ -223,6 +242,7 @@ class LiveSession(
             transcriber.update { it.copy(status = LiveStatus.DONE, recordingId = null, partial = null) }
             onClosed(this@LiveSession, null)
         }
+        return true
     }
 
     private fun fail(message: String) {
@@ -244,7 +264,5 @@ class LiveSession(
         private const val TAG = "Replika"
         private const val WORKER_POLL_MS = 200L
         private const val PSS_EVERY_MS = 3_000L
-        /** Same cap as imports: longer audio would not fit the pipeline's memory. */
-        private const val MAX_SAMPLES = DecodedAudio.MAX_DURATION_MS * DecodedAudio.SAMPLE_RATE / 1000
     }
 }

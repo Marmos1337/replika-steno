@@ -24,6 +24,7 @@ import ru.replika.steno.core.RecordingState
 import ru.replika.steno.core.SummaryPoint
 import ru.replika.steno.core.Utterance
 import ru.replika.steno.core.LIVE_SOURCE
+import ru.replika.steno.core.live.LiveLimits
 import ru.replika.steno.core.live.LiveLine
 import ru.replika.steno.core.live.LiveMetrics
 
@@ -68,7 +69,7 @@ class RecordingStore(private val context: Context) {
      */
     private fun recoverLive(r: Recording): Recording? {
         val dir = File(root, r.id)
-        val samples = runCatching { WavFile.repair(File(dir, AUDIO)) }.getOrNull()
+        val samples = runCatching { WavFile.repair(File(dir, AUDIO), LiveLimits.MAX_SAMPLES) }.getOrNull()
         val ms = (samples ?: 0) * 1000 / 16_000
         if (ms < MIN_LIVE_MS) {
             dir.deleteRecursively()
