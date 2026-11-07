@@ -3,7 +3,9 @@ package ru.replika.steno.ui
 import ru.replika.steno.ActiveJob
 
 import android.app.Application
+import android.Manifest
 import android.app.UiModeManager
+import android.content.pm.PackageManager
 import android.content.Context
 import android.net.Uri
 import android.os.Build
@@ -31,6 +33,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import ru.replika.steno.ReplikaApp
 import ru.replika.steno.core.Recording
 import ru.replika.steno.core.RecordingState
+import ru.replika.steno.core.live.LiveState
 import ru.replika.steno.data.ThemeMode
 import ru.replika.steno.export.TranscriptJson
 
@@ -131,9 +134,10 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
         }
         // The engine runs one recording at a time: anything imported meanwhile waits as NEW and starts
         // here once the engine is free. The short delay lets the finished job's coroutine fully end.
+        // A live recording holds the queue too, so live recognition does not compete with a new import.
         viewModelScope.launch {
-            combine(graph.job, store.items) { j, items -> j to items }.collectLatest { (j, items) ->
-                if (j != null) return@collectLatest
+            combine(graph.job, store.items, graph.live) { j, items, _ -> j to items }.collectLatest { (j, items) ->
+                if (j != null || graph.liveActive) return@collectLatest
                 val next = items.filter { it.state == RecordingState.NEW }.minByOrNull { it.createdAtMs } ?: return@collectLatest
                 delay(300)
                 graph.start(next.id)
@@ -314,6 +318,35 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
     fun resetMicError() {
         if (_mic.value is MicState.Failed) _mic.value = MicState.Idle
     }
+
+    // ------------------------------------------------------------ live recording
+
+    /** The live session for the live screen; null when there is none. */
+    val live: StateFlow<LiveState?> = graph.live
+
+    /** Starts live recording (RECORD_AUDIO must already be granted). False and a toast when it cannot start. */
+    fun startLive(): Boolean {
+        val error = graph.startLive() ?: return true
+        toast(error)
+        return false
+    }
+
+    /** Debug runs only (MainActivity checks the build is debuggable). */
+    fun startLiveFromFile(file: File) {
+        graph.startLiveFromFile(file)?.let { toast(it) }
+    }
+
+    fun pauseLive() = graph.pauseLive()
+    fun resumeLive() = graph.resumeLive()
+    fun stopLive() = graph.stopLive()
+    fun discardLive() = graph.discardLive()
+    /** After a DONE / ERROR state was shown; DONE also has the recording id to open its processing screen. */
+    fun dismissLive() = graph.dismissLive()
+
+    /** Android 13+: the recording notification needs a runtime grant; recording works without it. */
+    fun notificationPermissionNeeded(): Boolean =
+        Build.VERSION.SDK_INT >= 33 &&
+            getApplication<Application>().checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
 
     override fun onCleared() {
         mic.discard()

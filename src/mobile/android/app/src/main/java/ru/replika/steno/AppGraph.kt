@@ -1,6 +1,8 @@
 package ru.replika.steno
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -9,10 +11,19 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -26,14 +37,25 @@ import ru.replika.steno.core.Pipeline
 import ru.replika.steno.core.Progress
 import ru.replika.steno.core.RecordingState
 import ru.replika.steno.core.Stage
+import ru.replika.steno.core.LIVE_SOURCE
+import ru.replika.steno.core.live.LiveState
+import ru.replika.steno.core.live.VoicePrint
 import ru.replika.steno.data.RecordingStore
 import ru.replika.steno.data.Settings
+import ru.replika.steno.diar.SherpaStreamingVad
 import ru.replika.steno.diar.VadDiarizer
+import ru.replika.steno.live.FileSource
+import ru.replika.steno.live.LiveAudioSource
+import ru.replika.steno.live.LiveEngines
+import ru.replika.steno.live.LiveRecordingService
+import ru.replika.steno.live.LiveSession
+import ru.replika.steno.live.MicSource
 import ru.replika.steno.llm.LlmFormatter
 
 /** Live state of the one recording being processed. */
 data class ActiveJob(val recordingId: String, val progress: Progress, val note: String? = null)
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class AppGraph(private val context: Context) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val store = RecordingStore(context)
@@ -51,8 +73,88 @@ class AppGraph(private val context: Context) {
     @Volatile var llmStatus: String = "ещё не загружена"
         private set
 
+    private val liveSession = MutableStateFlow<LiveSession?>(null)
+    /**
+     * The live recording, if any: null when none was started or the last one was dismissed.
+     * Terminal states (DONE / ERROR) stay until [dismissLive] or the next [startLive].
+     */
+    val live: StateFlow<LiveState?> = liveSession
+        .flatMapLatest { it?.state ?: flowOf(null) }
+        .stateIn(scope, SharingStarted.Eagerly, null)
+
+    /** True while a live session is recording, paused or finishing. */
+    val liveActive: Boolean get() = liveSession.value?.active == true
+
     init {
         scope.launch { store.load() }
+    }
+
+    // ------------------------------------------------------------ live recording
+
+    /**
+     * Starts a live recording from the microphone. Returns null when it started (follow [live]),
+     * or a message for the user when it could not (no permission, already recording).
+     * An import that is already being processed keeps running: both share the recognizer, so live
+     * text may lag behind until it ends ([LiveState.lagging] shows it); queued imports wait.
+     */
+    fun startLive(): String? {
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return MicSource.NO_PERMISSION
+        return startLive(MicSource(context), "Живая запись " + SimpleDateFormat("dd.MM HH:mm", Locale.ROOT).format(Date()), LIVE_SOURCE, fromFile = false)
+    }
+
+    /** Debug builds only: plays [file] into the live engine at real-time pace (MainActivity, adb extra). */
+    fun startLiveFromFile(file: File): String? =
+        startLive(FileSource(context, file), "Живой тест: ${file.name}", "$LIVE_SOURCE:test", fromFile = true)
+
+    private fun startLive(source: LiveAudioSource, title: String, tag: String, fromFile: Boolean): String? {
+        if (liveActive) return "Запись уже идёт."
+        val session = LiveSession(store, scope, source, title, tag, fromFile, ::liveEngines, ::onLiveClosed)
+        liveSession.value = session
+        Log.i(TAG, "live: start (${if (fromFile) "file" else "mic"})")
+        // the service needs RECORD_AUDIO for type=microphone; a file test without it runs in the foreground only
+        if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            if (!LiveRecordingService.start(context)) session.notice("Запись идёт, пока приложение открыто: система не разрешила работу в фоне.")
+        }
+        scope.launch { session.start() }
+        return null
+    }
+
+    fun pauseLive() { liveSession.value?.pause() }
+
+    fun resumeLive() { liveSession.value?.resume() }
+
+    /** Stops capture; the recording is finished in the background and then processed like an import. */
+    fun stopLive() {
+        val s = liveSession.value ?: return
+        scope.launch { s.finish() }
+    }
+
+    /** Throws the take away: nothing is saved. */
+    fun discardLive() {
+        val s = liveSession.value ?: return
+        scope.launch {
+            s.discard()
+            // a discard pressed while starting completes inside start(); the session clears itself then
+            if (liveSession.value === s && !s.active) liveSession.value = null
+        }
+    }
+
+    /** Forgets a finished or failed session (the UI has shown its result). */
+    fun dismissLive() {
+        if (liveSession.value?.active == false) liveSession.value = null
+    }
+
+    private suspend fun liveEngines(): LiveEngines {
+        val (rec, dia) = asrEngines {}
+        val vad = withContext(Dispatchers.IO) { SherpaStreamingVad(context.assets) }
+        return LiveEngines(vad, rec, VoicePrint { dia.embed(it) }, release = { vad.release() })
+    }
+
+    private fun onLiveClosed(session: LiveSession, recordingId: String?) {
+        // a discarded take leaves nothing to show
+        if (recordingId == null && session.state.value.status == ru.replika.steno.core.live.LiveStatus.DONE && liveSession.value === session) liveSession.value = null
+        if (recordingId != null) start(recordingId) // busy -> stays NEW and the queue picks it up
+        if (running?.isActive != true) releaseWhenIdle()
     }
 
     fun start(recordingId: String) {
@@ -171,7 +273,7 @@ class AppGraph(private val context: Context) {
             engineLock.withLock { llm?.close(); llm = null }
             delay(IDLE_RELEASE_MS)
             engineLock.withLock {
-                if (running?.isActive == true) return@withLock
+                if (running?.isActive == true || liveActive) return@withLock
                 recognizer?.release(); recognizer = null
                 diarizer?.release(); diarizer = null
                 Log.i(TAG, "engines released")

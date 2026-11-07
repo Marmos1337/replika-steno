@@ -230,6 +230,7 @@ private fun RecordingRow(
                     FailureKind.OTHER -> StatusChip("Ошибка", ChipKind.ERROR)
                 }
                 RecordingState.NEW -> StatusChip("В очереди")
+                RecordingState.RECORDING -> StatusChip("Идёт запись", ChipKind.ACTIVE)
             }
             Box {
                 IconBtn(Ic.More, "Действия с записью", { menu = true }, tint = c.muted)

@@ -1,5 +1,8 @@
 package ru.replika.steno.core
 
+import ru.replika.steno.core.live.LiveLine
+import ru.replika.steno.core.live.LiveMetrics
+
 /**
  * One utterance of the transcript. [speakerId] is the stable identifier that goes into the
  * export ("speaker_1", "speaker_2", ...); the human-readable name lives in [Recording.speakerNames]
@@ -40,9 +43,23 @@ data class Recording(
     val llmPending: Boolean = false,
     /** Why there is no LLM result, if there is none (shown honestly in the summary tab). */
     val llmNote: String? = null,
+    /**
+     * Preliminary text shown while recording live. Kept so the processing screen has something to
+     * show; never exported and never labelled final - [utterances] from the full pipeline replace it.
+     */
+    val liveDraft: List<LiveLine> = emptyList(),
+    /** Measurements of the live session that produced this recording. */
+    val liveMetrics: LiveMetrics? = null,
 )
 
-enum class RecordingState { NEW, PROCESSING, READY, FAILED }
+enum class RecordingState {
+    NEW, PROCESSING, READY, FAILED,
+    /** Live recording in progress: audio is being written, nothing to process yet. */
+    RECORDING,
+}
+
+/** [Recording.sourceUri] of recordings made in the live mode. */
+const val LIVE_SOURCE = "live"
 
 data class MeetingSummary(
     val points: List<SummaryPoint> = emptyList(),

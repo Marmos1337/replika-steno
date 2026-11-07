@@ -23,6 +23,9 @@ import ru.replika.steno.core.Recording
 import ru.replika.steno.core.RecordingState
 import ru.replika.steno.core.SummaryPoint
 import ru.replika.steno.core.Utterance
+import ru.replika.steno.core.LIVE_SOURCE
+import ru.replika.steno.core.live.LiveLine
+import ru.replika.steno.core.live.LiveMetrics
 
 /**
  * Local-only persistence: every recording is a folder in filesDir with the audio copy and a JSON
@@ -33,6 +36,8 @@ class RecordingStore(private val context: Context) {
     private val root = File(context.filesDir, "recordings").apply { mkdirs() }
     private val _items = MutableStateFlow<List<Recording>>(emptyList())
     val items: StateFlow<List<Recording>> = _items.asStateFlow()
+    /** Live takes started by this process: [load] must not mistake them for leftovers of a crash. */
+    private val liveHere = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val _loaded = MutableStateFlow(false)
     /** False until the first [load] finished, so the UI does not flash an empty library on start. */
     val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
@@ -40,7 +45,7 @@ class RecordingStore(private val context: Context) {
     suspend fun load() = withContext(Dispatchers.IO) {
         val list = root.listFiles { f -> f.isDirectory }.orEmpty().mapNotNull { dir ->
             runCatching { fromJson(JSONObject(File(dir, META).readText())) }.getOrNull()
-        }.map {
+        }.mapNotNull { if (it.state == RecordingState.RECORDING && it.id !in liveHere) recoverLive(it) else it }.map {
             // a run interrupted by process death cannot resume half-way: mark it so the user can restart it
             when {
                 // a re-run that was killed keeps the transcript it already had
@@ -54,6 +59,30 @@ class RecordingStore(private val context: Context) {
         // keep anything imported or changed while the disk was being read
         _items.update { cur -> (list.associateBy { it.id } + cur.associateBy { it.id }).values.sortedByDescending { it.createdAtMs } }
         _loaded.value = true
+    }
+
+    /**
+     * A live recording the process died in the middle of (no session survives a restart). The WAV
+     * header is fixed to cover everything that reached the disk and the recording is offered for
+     * processing; a take shorter than [MIN_LIVE_MS] is removed.
+     */
+    private fun recoverLive(r: Recording): Recording? {
+        val dir = File(root, r.id)
+        val samples = runCatching { WavFile.repair(File(dir, AUDIO)) }.getOrNull()
+        val ms = (samples ?: 0) * 1000 / 16_000
+        if (ms < MIN_LIVE_MS) {
+            dir.deleteRecursively()
+            android.util.Log.i("Replika", "dropped interrupted live take ${r.id.take(8)} (${ms} ms)")
+            return null
+        }
+        val rec = r.copy(state = RecordingState.FAILED, error = LIVE_INTERRUPTED, durationMs = ms)
+        runCatching {
+            val tmp = File(dir, "$META.tmp")
+            tmp.writeText(toJson(rec).toString())
+            tmp.renameTo(File(dir, META))
+        }
+        android.util.Log.i("Replika", "recovered interrupted live take ${r.id.take(8)} (${ms} ms)")
+        return rec
     }
 
     fun get(id: String): Recording? = _items.value.firstOrNull { it.id == id }
@@ -87,6 +116,16 @@ class RecordingStore(private val context: Context) {
         file.copyTo(File(dir, AUDIO), overwrite = true)
         file.delete()
         val rec = Recording(id, title, "mic", System.currentTimeMillis(), 0)
+        save(rec)
+        rec
+    }
+
+    /** Creates the entry a live session writes its WAV into ([audioFile]); state [RecordingState.RECORDING] until Stop. */
+    suspend fun createLive(title: String, source: String = LIVE_SOURCE): Recording = withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID().toString()
+        liveHere += id
+        File(root, id).mkdirs()
+        val rec = Recording(id, title, source, System.currentTimeMillis(), 0, state = RecordingState.RECORDING)
         save(rec)
         rec
     }
@@ -126,6 +165,9 @@ class RecordingStore(private val context: Context) {
 
     companion object {
         const val INTERRUPTED = "Обработка была прервана: приложение закрылось. Запустите её снова."
+        const val LIVE_INTERRUPTED = "Запись прервалась: приложение закрылось. Звук до этого момента сохранён — запустите обработку."
+        /** Shorter live takes are not kept (nothing useful to transcribe). */
+        const val MIN_LIVE_MS = 1_000L
         private const val META = "recording.json"
         private const val AUDIO = "audio"
 
@@ -160,6 +202,13 @@ class RecordingStore(private val context: Context) {
             }
             put("llmPending", r.llmPending)
             r.llmNote?.let { put("llmNote", it) }
+            if (r.liveDraft.isNotEmpty()) put("liveDraft", JSONArray().apply {
+                r.liveDraft.forEach { l ->
+                    put(JSONObject().put("startMs", l.startMs).put("endMs", l.endMs).put("text", l.text).put("lang", l.lang)
+                        .put("speaker", l.speaker ?: JSONObject.NULL))
+                }
+            })
+            r.liveMetrics?.let { put("liveMetrics", it.toJson()) }
             r.metrics?.let { m ->
                 put("metrics", JSONObject().apply {
                     put("audioDurationMs", m.audioDurationMs); put("decodeMs", m.decodeMs)
@@ -215,6 +264,13 @@ class RecordingStore(private val context: Context) {
             val metrics = o.optJSONObject("metrics")?.let { m ->
                 ProcessingMetrics(m.getLong("audioDurationMs"), m.getLong("decodeMs"), m.getLong("diarizationMs"), m.getLong("asrMs"), m.getLong("llmMs"))
             }
+            val draft = o.optJSONArray("liveDraft")?.let { a ->
+                (0 until a.length()).map { i ->
+                    val l = a.getJSONObject(i)
+                    LiveLine(l.getLong("startMs"), l.getLong("endMs"), l.getString("text"), l.optString("lang", "ru"),
+                        if (l.isNull("speaker")) null else l.getInt("speaker"))
+                }
+            } ?: emptyList()
             return Recording(
                 id = o.getString("id"), title = o.getString("title"), sourceUri = o.optString("sourceUri"),
                 createdAtMs = o.getLong("createdAtMs"), durationMs = o.optLong("durationMs"),
@@ -224,6 +280,8 @@ class RecordingStore(private val context: Context) {
                 summary = summary, metrics = metrics,
                 llmPending = o.optBoolean("llmPending", false),
                 llmNote = if (o.has("llmNote")) o.getString("llmNote") else null,
+                liveDraft = draft,
+                liveMetrics = o.optJSONObject("liveMetrics")?.let { LiveMetrics.fromJson(it) },
             )
         }
     }

@@ -1,6 +1,7 @@
 package ru.replika.steno
 
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.graphics.Color as AColor
 import android.net.Uri
@@ -40,12 +41,30 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(dark) { applyWindow(dark) }
             ReplikaTheme(dark) { AppShell(vm) }
         }
-        if (savedInstanceState == null) handleShare(intent)
+        if (savedInstanceState == null) { handleLiveTest(intent); handleShare(intent) }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        handleLiveTest(intent)
         handleShare(intent)
+    }
+
+    /**
+     * Debuggable builds only: `--es live_test_file <name or path>` plays a file into the live engine at
+     * real-time pace (latency measurements on an emulator). A bare name is looked up in the app's
+     * external files dir. Ignored in non-debuggable builds.
+     */
+    private fun handleLiveTest(intent: Intent?) {
+        val name = intent?.getStringExtra(EXTRA_LIVE_TEST) ?: return
+        intent.removeExtra(EXTRA_LIVE_TEST)
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        val file = java.io.File(name).takeIf { it.isAbsolute } ?: java.io.File(getExternalFilesDir(null), name)
+        vm.startLiveFromFile(file)
+    }
+
+    companion object {
+        const val EXTRA_LIVE_TEST = "live_test_file"
     }
 
     private fun systemDark(): Boolean =

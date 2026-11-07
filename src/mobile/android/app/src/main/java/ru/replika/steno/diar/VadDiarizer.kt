@@ -107,6 +107,18 @@ class VadDiarizer(assets: AssetManager) : Diarizer {
         }
     }
 
+    /** Voice embedding of one phrase, for the live mode's provisional speaker numbers. */
+    fun embed(samples: FloatArray, sampleRate: Int = 16_000): FloatArray {
+        val stream = extractor.createStream()
+        try {
+            stream.acceptWaveform(samples, sampleRate)
+            stream.inputFinished()
+            return synchronized(this) { extractor.compute(stream) }
+        } finally {
+            stream.release()
+        }
+    }
+
     fun release() {
         vad.release()
         extractor.release()
