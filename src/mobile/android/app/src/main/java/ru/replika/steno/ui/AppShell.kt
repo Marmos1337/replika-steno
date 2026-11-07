@@ -422,7 +422,8 @@ private fun ToastHost(vm: ReplikaViewModel, modifier: Modifier) {
     LaunchedEffect(toast) {
         val t = toast ?: return@LaunchedEffect
         shown = t
-        delay(3_000)
+        // a toast with an action (undo) stays long enough to reach for the button
+        delay(if (t.action != null) 6_000 else 3_000)
         shown = null
         vm.toastShown(t)
     }
@@ -432,10 +433,20 @@ private fun ToastHost(vm: ReplikaViewModel, modifier: Modifier) {
         exit = fadeOut(Motion.spec(Theme.reducedMotion, Motion.FAST)),
         modifier = modifier.navigationBarsPadding().padding(bottom = Size.player + Space.m, start = Space.l, end = Space.l),
     ) {
-        var last by remember { mutableStateOf("") }
-        shown?.let { last = it.text }
-        Box(
-            Modifier.widthIn(max = 480.dp).clip(Radius.r14).background(c.text).padding(horizontal = Space.l, vertical = Space.m),
-        ) { Text(last, style = Type.body, color = c.onText) }
+        var last by remember { mutableStateOf<Toast?>(null) }
+        shown?.let { last = it }
+        val t = last ?: return@AnimatedVisibility
+        val action = t.action
+        Row(
+            Modifier.widthIn(max = 480.dp).clip(Radius.r14).background(c.text)
+                .padding(start = Space.l, end = if (action != null) Space.xs else Space.l),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(t.text, style = Type.body, color = c.onText, modifier = Modifier.weight(1f, fill = false).padding(vertical = Space.m))
+            if (action != null) {
+                Spacer(Modifier.width(Space.xs))
+                TextAction(action.label, { shown = null; vm.toastShown(t); action.run() }, color = c.onText)
+            }
+        }
     }
 }

@@ -158,6 +158,127 @@ object AudioDecoder {
         }
     }
 
+    /**
+     * Only [startMs, endMs) of the file, for re-recognizing one utterance. The extractor seeks close to
+     * [startMs] and decoding stops right after [endMs], so a fragment of a 2.5 h recording costs about
+     * as much time and memory as the fragment itself. Times come from the decoder's presentation
+     * timestamps, which match the sample count of [decode] up to the codec's priming (a few tens of ms).
+     */
+    suspend fun decodeRange(context: Context, uri: Uri, startMs: Long, endMs: Long): FloatArray {
+        require(endMs > startMs) { "empty range" }
+        val startUs = startMs * 1000
+        val endUs = endMs * 1000
+        val extractor = MediaExtractor()
+        try {
+            try {
+                extractor.setDataSource(context, uri, null)
+            } catch (e: Exception) {
+                throw AudioDecodeException("Не удалось открыть звук записи.", e)
+            }
+            val track = (0 until extractor.trackCount).firstOrNull {
+                extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+            } ?: throw AudioDecodeException("В файле нет звуковой дорожки.")
+            extractor.selectTrack(track)
+            val format = extractor.getTrackFormat(track)
+            val mime = format.getString(MediaFormat.KEY_MIME)!!
+            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+
+            var srcRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            var pcmFloat = false
+            val out = FloatArrayBuilder(((endMs - startMs) * DecodedAudio.SAMPLE_RATE / 1000).toInt() + DecodedAudio.SAMPLE_RATE / 10)
+            var resampler = StreamResampler(srcRate, DecodedAudio.SAMPLE_RATE, out)
+
+            var codec: MediaCodec? = null
+            try {
+                val c = try { MediaCodec.createDecoderByType(mime) } catch (e: Exception) {
+                    throw AudioDecodeException("Формат «$mime» не поддерживается этим устройством.", e)
+                }
+                codec = c
+                try {
+                    c.configure(format, null, null, 0)
+                    c.start()
+                } catch (e: Exception) {
+                    throw AudioDecodeException("Формат «$mime» не поддерживается этим устройством.", e)
+                }
+                val info = MediaCodec.BufferInfo()
+                var inputDone = false
+                var outputDone = false
+                while (!outputDone) {
+                    coroutineContext.ensureActive()
+                    if (!inputDone) {
+                        val inIdx = c.dequeueInputBuffer(1_000)
+                        if (inIdx >= 0) {
+                            val buf = c.getInputBuffer(inIdx)!!
+                            val size = extractor.readSampleData(buf, 0)
+                            // a little past the end, so the decoder's delay never cuts the last frames
+                            if (size < 0 || extractor.sampleTime > endUs + 500_000) {
+                                c.queueInputBuffer(inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                inputDone = true
+                            } else {
+                                c.queueInputBuffer(inIdx, 0, size, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
+                    }
+                    val outIdx = c.dequeueOutputBuffer(info, 1_000)
+                    when {
+                        outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            val of = c.outputFormat
+                            val rate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                            channels = of.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                            pcmFloat = of.containsKey(MediaFormat.KEY_PCM_ENCODING) &&
+                                of.getInteger(MediaFormat.KEY_PCM_ENCODING) == android.media.AudioFormat.ENCODING_PCM_FLOAT
+                            if (rate != srcRate) {
+                                srcRate = rate
+                                resampler = StreamResampler(srcRate, DecodedAudio.SAMPLE_RATE, out)
+                            }
+                        }
+                        outIdx >= 0 -> {
+                            val buf = c.getOutputBuffer(outIdx)!!.order(ByteOrder.LITTLE_ENDIAN)
+                            buf.position(info.offset)
+                            buf.limit(info.offset + info.size)
+                            var frame = 0L
+                            var pastEnd = false
+                            fun take(x: Float) {
+                                val tUs = info.presentationTimeUs + frame * 1_000_000L / srcRate
+                                frame++
+                                if (tUs >= endUs) pastEnd = true else if (tUs >= startUs) resampler.push(x)
+                            }
+                            if (pcmFloat) {
+                                val fb = buf.asFloatBuffer()
+                                while (!pastEnd && fb.remaining() >= channels) {
+                                    var x = 0f
+                                    repeat(channels) { x += fb.get() }
+                                    take(x / channels)
+                                }
+                            } else {
+                                val sb = buf.asShortBuffer()
+                                while (!pastEnd && sb.remaining() >= channels) {
+                                    var x = 0f
+                                    repeat(channels) { x += sb.get() / 32768f }
+                                    take(x / channels)
+                                }
+                            }
+                            c.releaseOutputBuffer(outIdx, false)
+                            if (pastEnd || info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) outputDone = true
+                        }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: IllegalStateException) {
+                throw AudioDecodeException("Файл повреждён: декодер не смог его прочитать.", e)
+            } finally {
+                codec?.let { runCatching { it.stop() }; it.release() }
+            }
+            if (out.size == 0) throw AudioDecodeException("В этом месте записи нет звука.")
+            return out.result(exact = true)
+        } finally {
+            extractor.release()
+        }
+    }
+
     /** Whole-array resampling with the same filter as the streaming path (used by tests and tools). */
     fun resample(input: FloatArray, from: Int, to: Int): FloatArray {
         if (from == to) return input

@@ -571,7 +571,15 @@ fun ConfirmDialog(
     }) { Text(text, style = Type.body, color = Theme.colors.muted) }
 }
 
-data class MenuEntry(val label: String, val icon: ImageVector, val danger: Boolean = false, val onClick: () -> Unit)
+/** [hint] is a muted second line; on a disabled entry it says why it is unavailable. */
+data class MenuEntry(
+    val label: String,
+    val icon: ImageVector,
+    val danger: Boolean = false,
+    val enabled: Boolean = true,
+    val hint: String? = null,
+    val onClick: () -> Unit,
+)
 
 @Composable
 fun AppMenu(expanded: Boolean, onDismiss: () -> Unit, entries: List<MenuEntry>) {
@@ -586,11 +594,21 @@ fun AppMenu(expanded: Boolean, onDismiss: () -> Unit, entries: List<MenuEntry>) 
         tonalElevation = 0.dp,
     ) {
         entries.forEach { e ->
-            val fg = if (e.danger) c.danger else c.text
+            val fg = when {
+                !e.enabled -> c.muted
+                e.danger -> c.danger
+                else -> c.text
+            }
             DropdownMenuItem(
-                text = { Text(e.label, style = Type.body, color = fg) },
+                text = {
+                    Column(Modifier.padding(vertical = if (e.hint != null) Space.xs else 0.dp)) {
+                        Text(e.label, style = Type.body, color = fg)
+                        if (e.hint != null) Text(e.hint, style = Type.label, color = c.muted, modifier = Modifier.widthIn(max = 240.dp))
+                    }
+                },
                 leadingIcon = { Icon(e.icon, null, Modifier.size(Size.iconSmall), tint = fg) },
                 onClick = { onDismiss(); e.onClick() },
+                enabled = e.enabled,
                 modifier = Modifier.heightIn(min = Size.touch),
             )
         }

@@ -24,6 +24,8 @@ data class Utterance(
     val edited: Boolean = false,
     /** "ru" or "en": which recognizer produced [rawText]. */
     val lang: String = "ru",
+    /** The text before the last «Распознать заново», for undo. Kept on the device, never exported. */
+    val previous: PreviousText? = null,
 )
 
 data class Recording(

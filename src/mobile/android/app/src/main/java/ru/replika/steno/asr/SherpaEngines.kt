@@ -7,6 +7,7 @@ import com.k2fsa.sherpa.onnx.OfflineNemoEncDecCtcModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import ru.replika.steno.core.AsrResult
+import ru.replika.steno.core.RecognizeMode
 import ru.replika.steno.core.Recognizer
 
 /** Model files inside the APK (assets/models/...). Kept in one place so the About screen shows the same list. */
@@ -69,6 +70,16 @@ class SherpaRecognizer(private val assets: AssetManager) : Recognizer {
         if (latinShare(textRu) <= 0.5f) return AsrResult(textRu, "ru")
         val textEn = en.recognize(samples, sampleRate)
         return if (textEn.isNotBlank()) AsrResult(textEn, "en") else AsrResult(textRu, "ru")
+    }
+
+    /** One fragment again: [RecognizeMode.AUTO] is the usual routing, RU / EN force that model. */
+    fun recognize(samples: FloatArray, sampleRate: Int, mode: RecognizeMode): AsrResult {
+        if (samples.size < sampleRate / 10) return AsrResult("", if (mode == RecognizeMode.EN) "en" else "ru")
+        return when (mode) {
+            RecognizeMode.AUTO -> recognize(samples, sampleRate)
+            RecognizeMode.RU -> AsrResult(ru.recognize(samples, sampleRate), "ru")
+            RecognizeMode.EN -> AsrResult(en.recognize(samples, sampleRate), "en")
+        }
     }
 
     fun release() {

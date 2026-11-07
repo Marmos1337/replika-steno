@@ -18,6 +18,7 @@ import org.json.JSONObject
 import ru.replika.steno.core.ActionItem
 import ru.replika.steno.core.MeetingSummary
 import ru.replika.steno.core.PointKind
+import ru.replika.steno.core.PreviousText
 import ru.replika.steno.core.ProcessingMetrics
 import ru.replika.steno.core.Recording
 import ru.replika.steno.core.RecordingState
@@ -185,6 +186,9 @@ class RecordingStore(private val context: Context) {
                         u.speakerConfidence?.let { put("speakerConfidence", it.toDouble()) }
                         put("lang", u.lang)
                         if (u.edited) put("edited", true)
+                        u.previous?.let { p ->
+                            put("previous", JSONObject().put("text", p.text).put("rawText", p.rawText).put("lang", p.lang).put("edited", p.edited))
+                        }
                     })
                 }
             })
@@ -232,6 +236,10 @@ class RecordingStore(private val context: Context) {
                         speakerConfidence = if (u.has("speakerConfidence")) u.getDouble("speakerConfidence").toFloat() else null,
                         lang = u.optString("lang", "ru"),
                         edited = u.optBoolean("edited", false),
+                        // absent in files written before re-recognition existed
+                        previous = u.optJSONObject("previous")?.let { p ->
+                            PreviousText(p.getString("text"), p.optString("rawText", p.getString("text")), p.optString("lang", "ru"), p.optBoolean("edited", false))
+                        },
                     )
                 }
             } ?: emptyList()

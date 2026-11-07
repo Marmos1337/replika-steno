@@ -6,6 +6,11 @@ import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +38,11 @@ import kotlinx.coroutines.withContext
 import ru.replika.steno.asr.SherpaRecognizer
 import ru.replika.steno.core.AudioDecodeException
 import ru.replika.steno.core.AudioDecoder
+import ru.replika.steno.core.DecodedAudio
+import ru.replika.steno.core.Fragment
+import ru.replika.steno.core.RecognizeMode
+import ru.replika.steno.core.Segments
+import ru.replika.steno.core.SpeakerTurn
 import ru.replika.steno.core.NoSpeechException
 import ru.replika.steno.core.Pipeline
 import ru.replika.steno.core.Progress
@@ -56,6 +66,17 @@ import ru.replika.steno.llm.LlmFormatter
 /** Live state of the one recording being processed. */
 data class ActiveJob(val recordingId: String, val progress: Progress, val note: String? = null)
 
+/** The one utterance being recognized again. */
+data class FragmentJob(val recordingId: String, val index: Int)
+
+sealed interface FragmentOutcome {
+    /** The new text is saved; the old one is in [ru.replika.steno.core.Utterance.previous]. */
+    data object Replaced : FragmentOutcome
+    /** The model said the same as before: nothing was changed. */
+    data object Same : FragmentOutcome
+    data class Failed(val message: String) : FragmentOutcome
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppGraph(private val context: Context) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -65,6 +86,11 @@ class AppGraph(private val context: Context) {
     private val _job = MutableStateFlow<ActiveJob?>(null)
     val job: StateFlow<ActiveJob?> = _job.asStateFlow()
     private var running: kotlinx.coroutines.Job? = null
+
+    private val _fragment = MutableStateFlow<FragmentJob?>(null)
+    /** The utterance being recognized again, if any (its row shows a spinner). */
+    val fragment: StateFlow<FragmentJob?> = _fragment.asStateFlow()
+    private var fragmentRun: kotlinx.coroutines.Job? = null
 
     private val engineLock = Mutex()
     private var recognizer: SherpaRecognizer? = null
@@ -312,16 +338,110 @@ class AppGraph(private val context: Context) {
         }
     }
 
+    // ------------------------------------------------------------ one utterance again
+
+    /**
+     * Why «Распознать заново» is not available now, or null when it is. A full processing run and a
+     * live take own the recognizer (and a re-run rewrites the utterances anyway); one fragment at a time.
+     */
+    fun fragmentBlocker(): String? = when {
+        liveActive -> "Недоступно во время живой записи"
+        running?.isActive == true -> "Недоступно, пока идёт обработка записи"
+        fragmentRun?.isActive == true -> "Дождитесь, пока распознается другая реплика"
+        else -> null
+    }
+
+    /**
+     * Recognizes utterance [index] of [recordingId] again from the stored audio: only its time range is
+     * decoded ([widen] adds up to a second of the gaps around it). Only text, rawText and lang of that
+     * utterance change; speaker and bounds stay. Runs in the app scope, so leaving the screen does not
+     * stop it.
+     */
+    fun rerecognize(recordingId: String, index: Int, mode: RecognizeMode, widen: Boolean): Deferred<FragmentOutcome> {
+        fragmentBlocker()?.let { return CompletableDeferred(FragmentOutcome.Failed(it)) }
+        _fragment.value = FragmentJob(recordingId, index)
+        val run = scope.async { runFragment(recordingId, index, mode, widen) }
+        fragmentRun = run
+        return run
+    }
+
+    private suspend fun runFragment(id: String, index: Int, mode: RecognizeMode, widen: Boolean): FragmentOutcome {
+        try {
+            val rec = store.get(id) ?: return FragmentOutcome.Failed("Запись не найдена.")
+            val u = rec.utterances.getOrNull(index) ?: return FragmentOutcome.Failed("Реплика не найдена.")
+            val span = Fragment.range(rec.utterances, index, widen, rec.durationMs)
+                ?: return FragmentOutcome.Failed("У реплики неверные границы времени. Обработайте запись заново.")
+            if (span.lengthMs > Fragment.MAX_MS) return FragmentOutcome.Failed("Реплика слишком длинная для повторного распознавания.")
+            val t0 = SystemClock.elapsedRealtime()
+            val rec0 = recognizerEngine()
+            val sr = DecodedAudio.SAMPLE_RATE
+            val samples = AudioDecoder.decodeRange(context, android.net.Uri.fromFile(store.audioFile(id)), span.startMs, span.endMs)
+            // the same <= 20 s pieces as the full pipeline, cut at the quietest point
+            val whole = SpeakerTurn(0, samples.size * 1000L / sr, 0)
+            val parts = withContext(Dispatchers.Default) {
+                Segments.splitForAsr(whole, samples, sr).map { p ->
+                    coroutineContext.ensureActive()
+                    rec0.recognize(Segments.slice(samples, sr, p.startMs, p.endMs), sr, mode)
+                }
+            }
+            val raw = parts.joinToString(" ") { it.text.trim() }.trim().replace(Regex("\\s+"), " ")
+            Log.i(TAG, "fragment ${id.take(8)}#$index $mode widen=$widen ${span.lengthMs} ms in ${SystemClock.elapsedRealtime() - t0} ms")
+            if (raw.isEmpty()) return FragmentOutcome.Failed("Модель не услышала речи в этом фрагменте. Текст не изменился.")
+            val lang = if (mode == RecognizeMode.AUTO) Fragment.mainLang(parts) else parts.first().lang
+            var outcome: FragmentOutcome = FragmentOutcome.Failed("Расшифровка изменилась, пока шло распознавание. Текст не заменён.")
+            withContext(NonCancellable) {
+                store.update(id) { cur ->
+                    val cu = cur.utterances.getOrNull(index)
+                    when {
+                        cur.state != RecordingState.READY || cu == null || !Fragment.same(cu, u) -> cur
+                        Fragment.unchanged(cu, raw, lang) -> { outcome = FragmentOutcome.Same; cur }
+                        else -> {
+                            outcome = FragmentOutcome.Replaced
+                            cur.copy(utterances = cur.utterances.toMutableList().also { it[index] = Fragment.apply(cu, raw, lang) })
+                        }
+                    }
+                }
+            }
+            return outcome
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: AudioDecodeException) {
+            Log.w(TAG, "fragment decode", e)
+            return FragmentOutcome.Failed(e.message ?: "Не удалось прочитать звук записи.")
+        } catch (e: OutOfMemoryError) {
+            return FragmentOutcome.Failed("Не хватило памяти устройства. Закройте другие приложения и попробуйте ещё раз.")
+        } catch (e: Exception) {
+            Log.e(TAG, "fragment failed", e)
+            return FragmentOutcome.Failed("Не удалось распознать фрагмент: ${e.message ?: e.javaClass.simpleName}")
+        } finally {
+            _fragment.value = null
+            // a full run may have started meanwhile: its LLM must stay open
+            releaseWhenIdle(closeLlm = running?.isActive != true)
+        }
+    }
+
+    /** Undo of «Распознать заново»: swaps the utterance text with the one it replaced. */
+    suspend fun undoFragment(recordingId: String, index: Int): Boolean {
+        var done = false
+        store.update(recordingId) { r ->
+            val u = r.utterances.getOrNull(index) ?: return@update r
+            val back = Fragment.undo(u) ?: return@update r
+            done = true
+            r.copy(utterances = r.utterances.toMutableList().also { it[index] = back })
+        }
+        return done
+    }
+
     /**
      * Models take ~1.5 GB while working. The LLM is closed right after its pass; the speech models are
      * kept for [IDLE_RELEASE_MS] in case the next recording is queued, then freed too.
      */
-    private fun releaseWhenIdle() {
+    private fun releaseWhenIdle(closeLlm: Boolean = true) {
         scope.launch {
-            engineLock.withLock { llm?.close(); llm = null }
+            if (closeLlm) engineLock.withLock { llm?.close(); llm = null }
             delay(IDLE_RELEASE_MS)
             engineLock.withLock {
-                if (running?.isActive == true || liveActive || liveHold) return@withLock
+                if (running?.isActive == true || fragmentRun?.isActive == true || liveActive || liveHold) return@withLock
                 recognizer?.release(); recognizer = null
                 diarizer?.release(); diarizer = null
                 _enginesReady.value = false
@@ -337,6 +457,14 @@ class AppGraph(private val context: Context) {
                 val d = diarizer ?: run { note("Загрузка модели голосов"); VadDiarizer(context.assets) }.also { diarizer = it }
                 _enginesReady.value = true
                 r to d
+            }
+        }
+
+    /** The recognizer alone: one fragment does not need the voice model. */
+    private suspend fun recognizerEngine(): SherpaRecognizer =
+        engineLock.withLock {
+            withContext(Dispatchers.IO) {
+                recognizer ?: SherpaRecognizer(context.assets).also { recognizer = it; _enginesReady.value = diarizer != null }
             }
         }
 

@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.draw.alpha
@@ -86,6 +87,7 @@ import kotlinx.coroutines.launch
 import ru.replika.steno.core.ActionItem
 import ru.replika.steno.core.MeetingSummary
 import ru.replika.steno.core.Recording
+import ru.replika.steno.core.RecognizeMode
 import ru.replika.steno.core.RecordingState
 import ru.replika.steno.core.Utterance
 import ru.replika.steno.export.TranscriptJson
@@ -123,6 +125,9 @@ fun TranscriptScreen(vm: ReplikaViewModel, id: String) {
 
 private sealed interface Dlg {
     data class Edit(val index: Int) : Dlg
+    data class Recognize(val index: Int) : Dlg
+    /** The line was corrected by hand: confirm before the model's text replaces it. */
+    data class ReplaceEdited(val index: Int, val mode: RecognizeMode, val widen: Boolean) : Dlg
     data class Original(val index: Int) : Dlg
     data class Rename(val speakerId: String) : Dlg
     data class Confidence(val index: Int) : Dlg
@@ -147,6 +152,16 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
     var dlg by remember { mutableStateOf<Dlg?>(null) }
     var follow by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
+    // «Распознать заново»: which row is working, and why the action is unavailable (re-read on every change)
+    val fragment by vm.fragment.collectAsState()
+    val job by vm.job.collectAsState()
+    val live by vm.live.collectAsState()
+    val blocker = when {
+        live?.status?.terminal == false -> "Недоступно во время живой записи"
+        job != null -> "Недоступно, пока идёт обработка записи"
+        fragment != null -> "Дождитесь, пока распознается другая реплика"
+        else -> null
+    }
     val summaryState = rememberLazyListState()
     val scrolled by remember { derivedStateOf { (if (tab == 0) listState else summaryState).canScrollBackward } }
 
@@ -360,12 +375,16 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
                             itemsIndexed(utts, key = { i, _ -> "u$i" }) { i, u ->
                                 UtteranceRow(
                                     rec, u, side,
+                                    busy = fragment?.let { it.recordingId == rec.id && it.index == i } == true,
+                                    blocker = blocker,
                                     playing = i == current || i == flash,
                                     query = if (matches.isNotEmpty()) q else "",
                                     active = i == activeMatch,
                                     onPlay = { tapped(); jumpTo(i) },
                                     onRename = { dlg = Dlg.Rename(u.speakerId) },
                                     onEdit = { dlg = Dlg.Edit(i) },
+                                    onRecognize = { dlg = Dlg.Recognize(i) },
+                                    onUndo = { vm.undoFragment(rec.id, i) },
                                     onOriginal = { dlg = Dlg.Original(i) },
                                     onConfidence = { dlg = Dlg.Confidence(i) },
                                     onCopy = {
@@ -398,6 +417,22 @@ private fun TranscriptContent(vm: ReplikaViewModel, rec: Recording) {
         is Dlg.Edit -> utts.getOrNull(d.index)?.let { u ->
             EditDialog(u, onSave = { vm.editUtterance(rec.id, d.index, it) }, onDismiss = { dlg = null })
         }
+        is Dlg.Recognize -> utts.getOrNull(d.index)?.let { u ->
+            RecognizeDialog(
+                u,
+                onRun = { mode, widen ->
+                    if (u.edited) dlg = Dlg.ReplaceEdited(d.index, mode, widen)
+                    else { dlg = null; vm.rerecognize(rec.id, d.index, mode, widen) }
+                },
+                onDismiss = { dlg = null },
+            )
+        }
+        is Dlg.ReplaceEdited -> ConfirmDialog(
+            title = "Заменить исправленный текст?",
+            text = "Вы исправили эту реплику вручную. Новый результат модели заменит ваш вариант, но его можно будет вернуть: «Вернуть прежний текст» в меню реплики.",
+            confirm = "Заменить",
+            onConfirm = { vm.rerecognize(rec.id, d.index, d.mode, d.widen) }, onDismiss = { dlg = null },
+        )
         is Dlg.Original -> utts.getOrNull(d.index)?.let { u ->
             AppDialog("Исходный текст", { dlg = null }, buttons = {
                 if (u.text != u.rawText) TextAction("Вернуть его", { vm.editUtterance(rec.id, d.index, u.rawText); dlg = null }, color = c.muted)
@@ -524,12 +559,16 @@ private fun UtteranceRow(
     rec: Recording,
     u: Utterance,
     side: Dp,
+    busy: Boolean,
+    blocker: String?,
     playing: Boolean,
     query: String,
     active: Boolean,
     onPlay: () -> Unit,
     onRename: () -> Unit,
     onEdit: () -> Unit,
+    onRecognize: () -> Unit,
+    onUndo: () -> Unit,
     onOriginal: () -> Unit,
     onConfidence: () -> Unit,
     onCopy: () -> Unit,
@@ -547,7 +586,7 @@ private fun UtteranceRow(
     Box(Modifier.fillMaxWidth().padding(horizontal = edge)) {
         Column(
             Modifier.fillMaxWidth().clip(Radius.r14).background(bg)
-                .combinedClickable(onClickLabel = "Слушать с этого места", onClick = onPlay, onLongClick = { menu = true })
+                .combinedClickable(onClickLabel = "Слушать с этого места", onClick = onPlay, onLongClick = { if (!busy) menu = true })
                 .padding(start = side - edge, bottom = Space.m),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -590,11 +629,22 @@ private fun UtteranceRow(
                     ) { Text("изменено", style = Type.label, color = c.muted, maxLines = 1) }
                 }
                 Box(Modifier.offset(x = edge - inset)) {
-                    IconBtn(Ic.More, "Действия с репликой", { menu = true }, tint = c.muted)
+                    // while the line is recognized again, a spinner takes the ⋮'s 48dp slot: nothing moves
+                    Fade(busy) { working ->
+                        if (working) {
+                            Box(Modifier.size(Size.touch).semantics { contentDescription = "Реплика распознаётся заново" }, contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(Modifier.size(Size.iconSmall), color = c.text, trackColor = c.raised, strokeWidth = 2.dp)
+                            }
+                        } else {
+                            IconBtn(Ic.More, "Действия с репликой", { menu = true }, tint = c.muted)
+                        }
+                    }
                     AppMenu(
-                        menu, { menu = false },
+                        menu && !busy, { menu = false },
                         buildList {
                             add(MenuEntry("Изменить текст", Ic.Edit, onClick = onEdit))
+                            add(MenuEntry("Распознать заново", Ic.Refresh, enabled = blocker == null, hint = blocker, onClick = onRecognize))
+                            if (u.previous != null) add(MenuEntry("Вернуть прежний текст", Ic.Rewind, onClick = onUndo))
                             if (u.text != u.rawText) add(MenuEntry("Исходный текст", Ic.Info, onClick = onOriginal))
                             add(MenuEntry("Переименовать участника", Ic.Settings, onClick = onRename))
                             add(MenuEntry("Скопировать", Ic.Copy, onClick = onCopy))
@@ -602,9 +652,10 @@ private fun UtteranceRow(
                     )
                 }
             }
+            val fg by animateColorAsState(if (busy) c.muted else c.text, Motion.spec(Theme.reducedMotion), label = "rowText")
             Text(
                 highlight(u.text, query, if (active) c.matchActive else c.match),
-                style = Type.body, color = c.text, modifier = Modifier.padding(end = side - edge),
+                style = Type.body, color = fg, modifier = Modifier.padding(end = side - edge),
             )
         }
     }
@@ -836,6 +887,64 @@ private fun DoubtNavigator(count: Int, pos: Int, onStep: (Int) -> Unit, onInfo: 
         }
         IconBtn(Ic.Up, "Предыдущая под вопросом", { onStep(-1) })
         IconBtn(Ic.Down, "Следующая под вопросом", { onStep(1) })
+    }
+}
+
+/** «Распознать заново»: which model, and whether to take a little of the gaps around the line. */
+@Composable
+private fun RecognizeDialog(u: Utterance, onRun: (RecognizeMode, Boolean) -> Unit, onDismiss: () -> Unit) {
+    val c = Theme.colors
+    var mode by rememberSaveable { mutableStateOf(RecognizeMode.AUTO) }
+    var widen by rememberSaveable { mutableStateOf(false) }
+    AppDialog("Распознать заново", onDismiss, buttons = {
+        TextAction("Отмена", onDismiss, color = c.muted)
+        TextAction("Распознать", { onRun(mode, widen) })
+    }) {
+        Text(
+            "Фрагмент ${fmtTime(u.startMs)}–${fmtTime(u.endMs)} пройдёт через модель ещё раз. Говорящий и время не меняются, прежний текст можно будет вернуть.",
+            style = Type.label, color = c.muted,
+        )
+        Spacer(Modifier.height(Space.s))
+        RecognizeMode.entries.forEach { m ->
+            ChoiceRow(m.title, m.hint, selected = m == mode, radio = true) { mode = m }
+        }
+        Spacer(Modifier.height(Space.xs))
+        Hairline()
+        Spacer(Modifier.height(Space.xs))
+        ChoiceRow("Захватить соседнее", "До 1 с тишины до и после — если слова обрезаны", selected = widen, radio = false) { widen = !widen }
+    }
+}
+
+/** One option of a dialog: a radio circle or a checkbox square, the label and a muted line under it. */
+@Composable
+private fun ChoiceRow(title: String, hint: String, selected: Boolean, radio: Boolean, onClick: () -> Unit) {
+    val c = Theme.colors
+    val shape = if (radio) Radius.pill else Radius.r6
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = Size.touch).clip(Radius.r14)
+            .then(
+                if (radio) Modifier.selectable(selected, role = Role.RadioButton, onClick = onClick)
+                else Modifier.toggleable(selected, role = Role.Checkbox, onValueChange = { onClick() }),
+            )
+            .padding(vertical = Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val box = Size.iconSmall + Space.xs - Size.stroke * 2
+        Box(
+            Modifier.size(box).clip(shape).background(if (selected && !radio) c.text else c.bg)
+                .border(Size.stroke, if (selected) c.text else c.borderStrong, shape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) {
+                if (radio) Box(Modifier.size(Size.dot).clip(Radius.pill).background(c.text))
+                else Icon(Ic.Check, null, Modifier.size(14.dp), tint = c.onText)
+            }
+        }
+        Spacer(Modifier.width(Space.m))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = Type.body, color = c.text)
+            Text(hint, style = Type.label, color = c.muted)
+        }
     }
 }
 

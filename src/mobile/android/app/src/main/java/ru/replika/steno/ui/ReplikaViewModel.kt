@@ -1,6 +1,9 @@
 package ru.replika.steno.ui
 
 import ru.replika.steno.ActiveJob
+import ru.replika.steno.FragmentJob
+import ru.replika.steno.FragmentOutcome
+import ru.replika.steno.core.RecognizeMode
 
 import android.app.Application
 import android.Manifest
@@ -74,7 +77,14 @@ sealed interface Screen {
     }
 }
 
-data class Toast(val text: String, val id: Long = SystemClock.elapsedRealtimeNanos())
+/** A short message over the player; [action] adds one text button (undo), and keeps it up longer. */
+data class Toast(
+    val text: String,
+    val action: ToastAction? = null,
+    val id: Long = SystemClock.elapsedRealtimeNanos(),
+)
+
+data class ToastAction(val label: String, val run: () -> Unit)
 
 class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : AndroidViewModel(app) {
     val graph = (app as ReplikaApp).graph
@@ -157,8 +167,8 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
         return true
     }
 
-    fun toast(text: String) {
-        _toast.value = Toast(text)
+    fun toast(text: String, action: ToastAction? = null) {
+        _toast.value = Toast(text, action)
     }
 
     fun toastShown(t: Toast) {
@@ -254,6 +264,27 @@ class ReplikaViewModel(app: Application, private val saved: SavedStateHandle) : 
                 list[index] = u.copy(text = clean, edited = clean != u.rawText)
                 r.copy(utterances = list)
             }
+        }
+    }
+
+    /** The utterance being recognized again, if any. */
+    val fragment: StateFlow<FragmentJob?> = graph.fragment
+
+    /** «Распознать заново» for one utterance; the result (or why it failed) comes as a toast. */
+    fun rerecognize(id: String, index: Int, mode: RecognizeMode, widen: Boolean) {
+        viewModelScope.launch {
+            when (val r = graph.rerecognize(id, index, mode, widen).await()) {
+                FragmentOutcome.Replaced -> toast("Реплика распознана заново", ToastAction("Вернуть") { undoFragment(id, index) })
+                FragmentOutcome.Same -> toast("Модель распознала то же самое — текст не изменился")
+                is FragmentOutcome.Failed -> toast(r.message)
+            }
+        }
+    }
+
+    /** Swaps the utterance back to the text it had before «Распознать заново» (and forth again). */
+    fun undoFragment(id: String, index: Int) {
+        viewModelScope.launch {
+            toast(if (graph.undoFragment(id, index)) "Прежний текст возвращён" else "Возвращать нечего")
         }
     }
 
